@@ -1,0 +1,3 @@
+url=neo4j://127.0.0.1:7687
+password=12345678
+database=IT-diathesis
