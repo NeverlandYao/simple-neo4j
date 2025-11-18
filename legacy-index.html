@@ -1,0 +1,328 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Neo4j 图谱查询（Legacy）</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:20px}
+button{padding:8px 12px}
+pre{background:#f6f8fa;padding:12px;border:1px solid #e1e4e8;overflow:auto}
+#graph{height:600px;border:1px solid #e1e4e8;margin-top:12px}
+</style>
+</head>
+<body class="min-h-screen bg-gradient-to-b from-neutral-50 to-neutral-100">
+<div class="mx-auto max-w-6xl px-4 py-6">
+  <div class="mb-6">
+    <h1 class="text-2xl font-semibold tracking-tight text-neutral-900">Neo4j 图谱查询</h1>
+    <p class="text-sm text-neutral-500">可视化关系网络，支持分层与起点展开</p>
+  </div>
+  <div id="toolbar" class="rounded-xl border bg-white/70 backdrop-blur shadow-sm p-4 flex flex-wrap gap-3 items-center">
+    <input id="q" placeholder="起点关键词" class="flex-1 md:flex-none md:w-48 px-3 py-2 text-sm rounded-md border focus:outline-none focus:ring-2 focus:ring-neutral-300" />
+    <div class="flex items-center gap-2">
+      <span class="text-sm text-neutral-600">层级深度</span>
+      <input id="depth" type="number" min="1" max="6" step="1" value="2" class="w-20 px-3 py-2 text-sm rounded-md border focus:outline-none focus:ring-2 focus:ring-neutral-300" />
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-sm text-neutral-600">限制节点数</span>
+      <input id="limit" type="number" min="10" max="2000" step="1" value="200" class="w-24 px-3 py-2 text-sm rounded-md border focus:outline-none focus:ring-2 focus:ring-neutral-300" />
+    </div>
+    <label class="inline-flex items-center gap-2 text-sm text-neutral-700 select-none">
+      <input id="hier" type="checkbox" class="h-4 w-4 rounded border" />分层布局
+    </label>
+    <label class="inline-flex items-center gap-2 text-sm text-neutral-700 select-none">
+      <input id="anim" type="checkbox" class="h-4 w-4 rounded border" checked />动画
+    </label>
+    <label class="inline-flex items-center gap-2 text-sm text-neutral-700 select-none">
+      <input id="threeLayer" type="checkbox" class="h-4 w-4 rounded border" />三层布局（素养-能力-知识）
+    </label>
+    <div class="ml-auto flex gap-2">
+      <button id="run" class="inline-flex items-center rounded-md bg-neutral-900 text-white hover:bg-neutral-800 px-4 py-2 text-sm font-medium shadow-sm">全图查询</button>
+      <button id="expand" class="inline-flex items-center rounded-md bg-neutral-900 text-white hover:bg-neutral-800 px-4 py-2 text-sm font-medium shadow-sm">从起点展开</button>
+      <button id="reset" class="inline-flex items-center rounded-md border bg-white hover:bg-neutral-50 px-4 py-2 text-sm font-medium shadow-sm">重置布局</button>
+    </div>
+    <div class="w-full h-px bg-neutral-200"></div>
+    <div class="flex flex-wrap items-center gap-3 w-full">
+      <div class="flex items-center gap-2">
+        <span class="text-sm text-neutral-600">筛选标签</span>
+        <div id="filterLabelsSelect" class="flex flex-wrap gap-2"></div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-sm text-neutral-600">筛选关系类型</span>
+        <div id="filterRelTypesSelect" class="flex flex-wrap gap-2"></div>
+      </div>
+      <button id="clearFilters" class="rounded-md border px-3 py-2 text-sm">清空筛选</button>
+    </div>
+  </div>
+  <div id="graph" class="rounded-xl border bg-white shadow-sm mt-4"></div>
+  <div id="crud" class="rounded-xl border bg-white shadow-sm mt-4 p-4">
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-sm font-medium text-neutral-900">三步向导</div>
+      <div class="flex gap-2">
+        <button id="openNodeWizard" class="rounded-md bg-neutral-900 text-white px-3 py-2 text-sm">新建节点</button>
+        <button id="deleteSelected" class="rounded-md border px-3 py-2 text-sm">删除选中节点</button>
+        <button id="manageSelected" class="rounded-md border px-3 py-2 text-sm">管理选中节点</button>
+        <button id="pairMode" class="rounded-md border px-3 py-2 text-sm">与另一节点建关系</button>
+        <button id="deleteSelectedRel" class="rounded-md border px-3 py-2 text-sm">删除选中关系</button>
+        <button id="clearSelection" class="rounded-md border px-3 py-2 text-sm">清空选择</button>
+      </div>
+    </div>
+    <div class="text-xs text-neutral-600 mb-2">当前选中：<span id="selectedInfo"></span></div>
+    <div class="text-xs text-neutral-500">在下方搜索并选择两个节点后将自动弹出关系表单</div>
+    <div class="text-sm font-medium text-neutral-900 mt-4">快速搜索</div>
+    <div class="flex gap-2 items-center mb-2">
+      <input id="searchQ" placeholder="输入名称/标题/ID关键词" class="flex-1 px-3 py-2 text-sm rounded-md border" />
+      <button id="searchBtn" class="rounded-md border px-3 py-2 text-sm">搜索节点</button>
+    </div>
+    <div id="nodeResults" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
+    <div id="status" class="text-sm text-neutral-600 mt-2"></div>
+  </div>
+  <div id="wizard" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/30"></div>
+    <div class="relative mx-auto max-w-md mt-20 rounded-xl border bg-white shadow p-4">
+      <div id="wizardTitle" class="text-lg font-semibold"></div>
+      <div id="wizardContent" class="mt-2 space-y-3"></div>
+      <div class="mt-4 flex justify-end gap-2">
+        <button id="wizardCancel" class="rounded-md border px-3 py-2 text-sm">取消</button>
+        <button id="wizardDelete" class="hidden rounded-md bg-red-600 text-white px-3 py-2 text-sm">删除</button>
+        <button id="wizardSubmit" class="rounded-md bg-neutral-900 text-white px-3 py-2 text-sm">提交</button>
+      </div>
+    </div>
+  </div>
+</div>
+<link rel="stylesheet" href="https://unpkg.com/vis-network/styles/vis-network.css">
+<script src="https://unpkg.com/neo4j-driver"></script>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script>
+async function loadConfig(){
+  const res=await fetch('neo4j-link.txt');
+  const text=await res.text();
+  const out={};
+  text.split(/\r?\n/).forEach(line=>{
+    const i=line.indexOf('=');
+    if(i>0){
+      const k=line.slice(0,i).trim();
+      const v=line.slice(i+1).trim();
+      if(k) out[k]=v;
+    }
+  });
+  return out;
+}
+let selNodeId='';
+let selEdgeId='';
+let lastMode='query';
+function mapRecord(record){
+  const n=record.get('n');
+  const r=record.get('r');
+  const m=record.get('m');
+  const idOf=(x)=> x && (x.elementId ?? (x.identity && (typeof x.identity.toString==='function'?x.identity.toString():String(x.identity))));
+  const toNum=(x)=> x && typeof x.toNumber==='function' ? x.toNumber() : x;
+  return {
+    n: n ? { id:idOf(n), labels:n.labels, properties:n.properties } : null,
+    r: r ? { id:idOf(r), type:r.type, start:r.startNodeElementId ?? toNum(r.start), end:r.endNodeElementId ?? toNum(r.end), properties:r.properties } : null,
+    m: m ? { id:idOf(m), labels:m.labels, properties:m.properties } : null
+  };
+}
+function labelForNode(n){
+  const name=n.properties&& (n.properties.name||n.properties.title||n.properties.id);
+  const labels=(n.labels&&n.labels.join('\n'))||'';
+  return name? String(name): labels|| String(n.id);
+}
+function levelForLabels(labels){ const ls=labels||[]; if(ls.includes('Competency')) return 1; if(ls.includes('Skill')) return 2; if(ls.includes('Concept')) return 3; return 2 }
+function groupForLabels(labels){ const ls=labels||[]; if(ls.includes('Competency')) return 'Competency'; if(ls.includes('Skill')) return 'Skill'; if(ls.includes('Concept')) return 'Concept'; return (ls[0]||'Node') }
+function palette(i){
+  const colors=['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+  return colors[i%colors.length];
+}
+function getFilterLabels(){const c=document.getElementById('filterLabelsSelect'); if(!c) return []; return Array.from(c.querySelectorAll('input[type="checkbox"]:checked')).map(el=>el.value)}
+function getFilterRelTypes(){const c=document.getElementById('filterRelTypesSelect'); if(!c) return []; return Array.from(c.querySelectorAll('input[type="checkbox"]:checked')).map(el=>el.value)}
+function hasAnyLabel(labels, set){return set.length===0 || (labels||[]).some(l=>set.includes(l))}
+function renderGraph(data){
+  const nodeMap=new Map();
+  const edgeMap=new Map();
+  const labelFilter=getFilterLabels();
+  const typeFilter=getFilterRelTypes();
+  data.forEach(({n,r,m})=>{
+    if(!n) return;
+    const gN=groupForLabels(n.labels);
+    const nOK=hasAnyLabel(n.labels,labelFilter);
+    if(!r){
+      if(labelFilter.length===0 || nOK){
+        if(!nodeMap.has(n.id)) nodeMap.set(n.id,{id:String(n.id),label:labelForNode(n),group:gN});
+      }
+      return;
+    }
+    const gM=groupForLabels(m?m.labels:[]);
+    const mOK=m?hasAnyLabel(m.labels,labelFilter):false;
+    const from=String(r.start);
+    const to=String(r.end);
+    const eid=String(r.id||`${from}-${to}-${r.type||''}`);
+    const tOK=(typeFilter.length===0 || typeFilter.includes(r.type));
+    if(tOK && (labelFilter.length===0 || nOK || mOK)){
+      if(!nodeMap.has(n.id)) nodeMap.set(n.id,{id:String(n.id),label:labelForNode(n),group:gN});
+      if(m && !nodeMap.has(m.id)) nodeMap.set(m.id,{id:String(m.id),label:labelForNode(m),group:gM});
+      if(!edgeMap.has(eid)) edgeMap.set(eid,{id:eid,from, to, label:r.type});
+    }
+  });
+  const nodes=[...nodeMap.values()];
+  const edges=[...edgeMap.values()];
+  const container=document.getElementById('graph');
+  const hier=document.getElementById('hier').checked;
+  const anim=document.getElementById('anim').checked;
+  const options={
+    physics:{enabled:anim, stabilization:anim?false:true, solver:'barnesHut'},
+    interaction:{hover:true},
+    nodes:{shape:'dot',size:18},
+    edges:{smooth:true, arrows:{to:true}},
+    layout: hier? {hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize'}} : undefined,
+    groups:{}
+  };
+  const labels=[...new Set(nodes.map(n=>n.group))];
+  const fixed={Competency:'#d62728',Skill:'#1f77b4',Concept:'#2ca02c'};
+  labels.forEach((lb,i)=>{const col=fixed[lb]||palette(i); options.groups[lb]={color:{background:col, border:'#333'},font:{color:'#111'}}});
+  const three=document.getElementById('threeLayer').checked;
+  if(three){ nodes.forEach(n=>{ n.level=levelForLabels(n.labels||[]) }); options.layout={hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize',levelSeparation:140,nodeSpacing:90}}; options.physics={enabled:false} }
+  const network=new vis.Network(container,{nodes:new vis.DataSet(nodes),edges:new vis.DataSet(edges)},options);
+  network.on('selectNode',e=>{selNodeId=e.nodes[0]||'';const s=document.getElementById('status');s.textContent=selNodeId?('选中节点: '+selNodeId):''; const si=document.getElementById('selectedInfo'); if(si) si.textContent=selNodeId; if(pendingRelFromId && selNodeId && pendingRelFromId!==selNodeId){openRelWizard(pendingRelFromId, selNodeId); pendingRelFromId=''} });
+  network.on('selectEdge',e=>{selEdgeId=e.edges[0]||'';const s=document.getElementById('status');s.textContent=selEdgeId?('选中关系: '+selEdgeId):''; const si=document.getElementById('selectedInfo'); if(si) si.textContent=selEdgeId});
+  if(!anim) network.stabilize();
+}
+function buildFromPaths(records){
+  const nodeMap=new Map();
+  const edgeMap=new Map();
+  const labelFilter=getFilterLabels();
+  const typeFilter=getFilterRelTypes();
+  records.forEach(rec=>{
+    const ns=rec.get('ns');
+    const rs=rec.get('rs');
+    ns.forEach(n=>{
+      const id=n.elementId ?? (n.identity && (typeof n.identity.toString==='function'?n.identity.toString():String(n.identity)));
+      const g=groupForLabels(n.labels);
+      const nOK=hasAnyLabel(n.labels,labelFilter);
+      if((labelFilter.length===0 || nOK) && !nodeMap.has(id)) nodeMap.set(id,{id:String(id),label:labelForNode({id,labels:n.labels,properties:n.properties}),group:g});
+    });
+    rs.forEach(r=>{
+      const id=r.elementId ?? (r.identity && (typeof r.identity.toString==='function'?r.identity.toString():String(r.identity)));
+      const from=String(r.startNodeElementId ?? (r.start && (typeof r.start.toString==='function'?r.start.toString():String(r.start))));
+      const to=String(r.endNodeElementId ?? (r.end && (typeof r.end.toString==='function'?r.end.toString():String(r.end))));
+      const eid=String(id||`${from}-${to}-${r.type||''}`);
+      const tOK=(typeFilter.length===0 || typeFilter.includes(r.type));
+      if(tOK && !edgeMap.has(eid)) edgeMap.set(eid,{id:eid,from,to,label:r.type});
+    });
+  });
+  return {nodes:[...nodeMap.values()],edges:[...edgeMap.values()]};
+}
+async function runQuery(){
+  const container=document.getElementById('graph');
+  container.textContent='加载中…';
+  try{
+    lastMode='query';
+    const cfg=await loadConfig();
+    const uri=cfg.url;
+    const user=cfg.user || 'neo4j';
+    const password=cfg.password;
+    const database=cfg.database;
+    const driver=neo4j.driver(uri, neo4j.auth.basic(user, password));
+    const session=driver.session({ database });
+    const limitVal=Math.max(1, Math.floor(parseFloat(document.getElementById('limit').value)||200));
+    const result=await session.run('MATCH (n) WITH n LIMIT $limit OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m',{limit: neo4j.int(limitVal)});
+    const data=result.records.map(mapRecord);
+    renderGraph(data);
+    await session.close();
+    await driver.close();
+  }catch(e){
+    container.textContent=String(e);
+  }
+}
+async function runExpand(){
+  const container=document.getElementById('graph');
+  container.textContent='加载中…';
+  try{
+    lastMode='expand';
+    const cfg=await loadConfig();
+    const uri=cfg.url;
+    const user=cfg.user || 'neo4j';
+    const password=cfg.password;
+    const database=cfg.database;
+    const driver=neo4j.driver(uri, neo4j.auth.basic(user, password));
+    const session=driver.session({ database });
+    const q=document.getElementById('q').value||'';
+    const depthVal=Math.max(1, Math.floor(parseFloat(document.getElementById('depth').value)||2));
+    const limitVal=Math.max(1, Math.floor(parseFloat(document.getElementById('limit').value)||200));
+    const cypher=`MATCH (n) WHERE any(prop IN [n.name, n.title, n.id] WHERE toLower(toString(coalesce(prop,''))) CONTAINS toLower($q)) WITH n LIMIT 1 MATCH p=(n)-[r*1..${depthVal}]-(m) WITH nodes(p) AS ns, relationships(p) AS rs RETURN ns, rs LIMIT $limit`;
+    const result=await session.run(cypher,{q,limit: neo4j.int(limitVal)});
+    const visData=buildFromPaths(result.records);
+    const container2=document.getElementById('graph');
+    container2.textContent='';
+  const hier=document.getElementById('hier').checked;
+  const anim=document.getElementById('anim').checked;
+  const options={
+    physics:{enabled:anim, stabilization:anim?false:true, solver:'barnesHut'},
+    interaction:{hover:true},
+    nodes:{shape:'dot',size:18},
+    edges:{smooth:true, arrows:{to:true}},
+    layout: hier? {hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize'}} : undefined,
+    groups:{}
+  };
+    const labels=[...new Set(visData.nodes.map(n=>n.group))];
+    const fixed={Competency:'#d62728',Skill:'#1f77b4',Concept:'#2ca02c'};
+    labels.forEach((lb,i)=>{const col=fixed[lb]||palette(i); options.groups[lb]={color:{background:col, border:'#333'},font:{color:'#111'}}});
+    const three=document.getElementById('threeLayer').checked;
+    if(three){ visData.nodes.forEach(n=>{ n.level=levelForLabels(n.labels||[]) }); options.layout={hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize',levelSeparation:140,nodeSpacing:90}}; options.physics={enabled:false} }
+    const network=new vis.Network(container2,{nodes:new vis.DataSet(visData.nodes),edges:new vis.DataSet(visData.edges)},options);
+    network.focus(visData.nodes[0]?.id||'',{scale:1.2, animation:{duration:800, easingFunction:'easeInOutQuad'}});
+    network.on('selectNode',e=>{selNodeId=e.nodes[0]||'';const s=document.getElementById('status');s.textContent=selNodeId?('选中节点: '+selNodeId):''; const si=document.getElementById('selectedInfo'); if(si) si.textContent=selNodeId; if(pendingRelFromId && selNodeId && pendingRelFromId!==selNodeId){openRelWizard(pendingRelFromId, selNodeId); pendingRelFromId=''} });
+    network.on('selectEdge',e=>{selEdgeId=e.edges[0]||'';const s=document.getElementById('status');s.textContent=selEdgeId?('选中关系: '+selEdgeId):''; const si=document.getElementById('selectedInfo'); if(si) si.textContent=selEdgeId});
+    if(!anim) network.stabilize();
+    await session.close();
+    await driver.close();
+  }catch(e){
+    container.textContent=String(e);
+  }
+}
+document.getElementById('run').addEventListener('click', runQuery);
+document.getElementById('expand').addEventListener('click', runExpand);
+document.getElementById('reset').addEventListener('click', ()=>{runQuery()});
+function showMsg(t,ok){const el=document.getElementById('status');el.textContent=t;el.className=ok?'text-sm text-green-700':'text-sm text-red-700'}
+let availableLabels=[]; let availableRelTypes=[];
+async function initMeta(){ try{ const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); const resL=await session.run('MATCH (n) UNWIND labels(n) AS l RETURN DISTINCT l LIMIT 100'); availableLabels=resL.records.map(r=>r.get('l')); const resT=await session.run('MATCH ()-[r]-() RETURN DISTINCT type(r) AS t LIMIT 100'); availableRelTypes=resT.records.map(r=>r.get('t')); await session.close(); await driver.close(); renderLabelsSelect(); renderRelTypeSelect(); addKVRow('nodePropsKv','name',''); addKVRow('relPropsKv',''); addKVRow('nodePropsUpdateKv'); addKVRow('relPropsUpdateKv'); }catch(e){}
+}
+function renderLabelsSelect(){const c=document.getElementById('labelsSelect'); c.textContent=''; availableLabels.forEach(lb=>{const label=document.createElement('label'); label.className='inline-flex items-center gap-2 px-2 py-1 rounded-md border'; const cb=document.createElement('input'); cb.type='checkbox'; cb.value=lb; cb.className='h-4 w-4 rounded border'; const span=document.createElement('span'); span.className='text-sm'; span.textContent=lb; label.appendChild(cb); label.appendChild(span); c.appendChild(label)});}
+function getSelectedLabels(){const c=document.getElementById('labelsSelect'); const checked=Array.from(c.querySelectorAll('input[type="checkbox"]:checked')).map(el=>el.value); const extra=(document.getElementById('nodeLabels').value||'').split(',').map(s=>s.trim()).filter(Boolean); return Array.from(new Set([...checked,...extra]));}
+function renderRelTypeSelect(){const sel=document.getElementById('relTypeSelect'); sel.textContent=''; const empty=document.createElement('option'); empty.value=''; empty.textContent='选择类型'; sel.appendChild(empty); availableRelTypes.forEach(t=>{const o=document.createElement('option'); o.value=t; o.textContent=t; sel.appendChild(o)});}
+function renderFilterLabelsSelect(){const c=document.getElementById('filterLabelsSelect'); if(!c) return; c.textContent=''; availableLabels.forEach(lb=>{const label=document.createElement('label'); label.className='inline-flex items-center gap-2 px-2 py-1 rounded-md border'; const cb=document.createElement('input'); cb.type='checkbox'; cb.value=lb; cb.className='h-4 w-4 rounded border'; const span=document.createElement('span'); span.className='text-sm'; span.textContent=lb; label.appendChild(cb); label.appendChild(span); c.appendChild(label)});} 
+function renderFilterRelTypesSelect(){const c=document.getElementById('filterRelTypesSelect'); if(!c) return; c.textContent=''; availableRelTypes.forEach(t=>{const label=document.createElement('label'); label.className='inline-flex items-center gap-2 px-2 py-1 rounded-md border'; const cb=document.createElement('input'); cb.type='checkbox'; cb.value=t; cb.className='h-4 w-4 rounded border'; const span=document.createElement('span'); span.className='text-sm'; span.textContent=t; label.appendChild(cb); label.appendChild(span); c.appendChild(label)});} 
+function clearFilters(){const a=document.getElementById('filterLabelsSelect'); const b=document.getElementById('filterRelTypesSelect'); if(a) Array.from(a.querySelectorAll('input[type="checkbox"]')).forEach(x=>x.checked=false); if(b) Array.from(b.querySelectorAll('input[type="checkbox"]')).forEach(x=>x.checked=false);} 
+function renderFilters(){renderFilterLabelsSelect(); renderFilterRelTypesSelect();}
+async function searchNodes(){ try{ const q=document.getElementById('searchQ').value||''; const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); const res=await session.run('MATCH (n) WHERE toLower(toString(coalesce(n.name,n.title,n.id,""))) CONTAINS toLower($q) RETURN elementId(n) AS id, labels(n) AS labels, n AS n LIMIT $limit',{q,limit:neo4j.int(50)}); const list=res.records.map(r=>({id:r.get('id'),labels:r.get('labels'),n:r.get('n')})); await session.close(); await driver.close(); renderNodeResults(list) }catch(e){ showMsg(String(e),false) }}
+function renderNodeResults(list){const c=document.getElementById('nodeResults'); c.textContent=''; list.forEach(item=>{const card=document.createElement('div'); card.className='rounded-md border p-2 flex items-center justify-between'; const left=document.createElement('div'); left.className='flex flex-col'; const title=document.createElement('div'); title.className='text-sm font-medium'; title.textContent=(item.n.properties.name||item.n.properties.title||item.id||''); const sub=document.createElement('div'); sub.className='text-xs text-neutral-500'; sub.textContent=(item.labels||[]).join(','); left.appendChild(title); left.appendChild(sub); const actions=document.createElement('div'); actions.className='flex gap-2'; const sel=document.createElement('button'); sel.className='rounded-md border px-2 py-1 text-xs'; sel.textContent='选择'; sel.onclick=()=>{const idx=selectedNodeIds.indexOf(item.id); if(idx>=0){selectedNodeIds.splice(idx,1); card.classList.remove('ring-2','ring-neutral-400');} else {selectedNodeIds.push(item.id); card.classList.add('ring-2','ring-neutral-400');} showMsg('已选择: '+selectedNodeIds.join(', '), true); if(selectedNodeIds.length===2){openRelWizard(selectedNodeIds[0], selectedNodeIds[1])}}; const manage=document.createElement('button'); manage.className='rounded-md border px-2 py-1 text-xs'; manage.textContent='管理'; manage.onclick=()=>{openNodeManage(item.id)}; actions.appendChild(sel); actions.appendChild(manage); card.appendChild(left); card.appendChild(actions); c.appendChild(card) });}
+function cleanLabel(l){return l.replace(/[^A-Za-z0-9_]/g,'');}
+let selectedNodeIds=[]; let wizardMode=''; let relStart=''; let relEnd=''; let pendingRelFromId='';
+function openWizard(){document.getElementById('wizardDelete').classList.add('hidden'); document.getElementById('wizard').classList.remove('hidden')}
+function closeWizard(){document.getElementById('wizard').classList.add('hidden'); document.getElementById('wizardTitle').textContent=''; document.getElementById('wizardContent').textContent=''; wizardMode='';}
+function openNodeWizard(){wizardMode='node'; document.getElementById('wizardTitle').textContent='新建节点'; const cont=document.getElementById('wizardContent'); cont.textContent=''; const step1=document.createElement('div'); const sel=document.createElement('select'); sel.id='wizNodeTpl'; sel.className='w-full px-3 py-2 text-sm rounded-md border'; ['Concept','Skill','Competency','Task','Indicator','Behavior'].forEach(x=>{const o=document.createElement('option'); o.value=x; o.textContent=x; sel.appendChild(o)}); step1.appendChild(sel); const step2=document.createElement('div'); const name=document.createElement('input'); name.id='wizNodeName'; name.placeholder='名称'; name.className='w-full px-3 py-2 text-sm rounded-md border'; step2.appendChild(name); cont.appendChild(step1); cont.appendChild(step2); openWizard()}
+async function submitNodeWizard(){ try{ const tpl=document.getElementById('wizNodeTpl').value; const name=(document.getElementById('wizNodeName').value||'').trim(); if(!tpl||!name) return showMsg('请选择模板并填写名称',false); const label=tpl; const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); const cypher=`CREATE (n:${label}) SET n.name=$name RETURN elementId(n) AS id`; const res=await session.run(cypher,{name}); showMsg('创建节点: '+(res.records[0]?.get('id')||''),true); await session.close(); await driver.close(); closeWizard(); lastMode==='expand'?runExpand():runQuery(); }catch(e){ showMsg(String(e),false) }}
+let manageNodeId='';
+async function openNodeManage(id){ manageNodeId=id; wizardMode='nodeManage'; document.getElementById('wizardTitle').textContent='管理节点'; const cont=document.getElementById('wizardContent'); cont.textContent=''; const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); const res=await session.run('MATCH (n) WHERE elementId(n)=$id RETURN coalesce(n.name,n.title,n.id,"") AS nm',{id}); await session.close(); await driver.close(); const name=document.createElement('input'); name.id='wizNodeRename'; name.placeholder='名称'; name.className='w-full px-3 py-2 text-sm rounded-md border'; name.value=res.records[0]?.get('nm')||''; cont.appendChild(name); document.getElementById('wizardDelete').classList.remove('hidden'); openWizard() }
+async function submitNodeRename(){ try{ const nm=(document.getElementById('wizNodeRename').value||'').trim(); if(!manageNodeId||!nm) return showMsg('缺少ID或名称',false); const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); const res=await session.run('MATCH (n) WHERE elementId(n)=$id SET n.name=$nm RETURN elementId(n) AS id',{id:manageNodeId,nm}); await session.close(); await driver.close(); showMsg('重命名成功: '+(res.records[0]?.get('id')||''),true); closeWizard(); lastMode==='expand'?runExpand():runQuery(); }catch(e){ showMsg(String(e),false) }}
+async function submitNodeDelete(){ try{ if(!manageNodeId) return showMsg('缺少节点ID',false); const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); await session.run('MATCH (n) WHERE elementId(n)=$id DETACH DELETE n',{id:manageNodeId}); await session.close(); await driver.close(); showMsg('已删除节点: '+manageNodeId,true); closeWizard(); lastMode==='expand'?runExpand():runQuery(); }catch(e){ showMsg(String(e),false) }}
+function openRelWizard(aid,bid){wizardMode='rel'; relStart=aid; relEnd=bid; document.getElementById('wizardTitle').textContent='新建关系'; const cont=document.getElementById('wizardContent'); cont.textContent=''; const info=document.createElement('div'); info.className='text-xs text-neutral-600'; info.textContent='起点 '+aid+' → 终点 '+bid; cont.appendChild(info); const search=document.createElement('input'); search.id='wizRelTypeSearch'; search.placeholder='搜索关系类型'; search.className='w-full px-3 py-2 text-sm rounded-md border'; cont.appendChild(search); const sel=document.createElement('select'); sel.id='wizRelType'; sel.className='w-full px-3 py-2 text-sm rounded-md border'; const types=[...availableRelTypes]; types.forEach(x=>{const o=document.createElement('option'); o.value=x; o.textContent=x; sel.appendChild(o)}); cont.appendChild(sel); const name=document.createElement('input'); name.id='wizRelName'; name.placeholder='名称(可选)'; name.className='w-full px-3 py-2 text-sm rounded-md border'; cont.appendChild(name); search.addEventListener('input',()=>{const q=search.value.toLowerCase(); Array.from(sel.options).forEach(opt=>{opt.hidden= q && !opt.value.toLowerCase().includes(q)})}); openWizard()}
+async function submitRelWizard(){ try{ const type=(document.getElementById('wizRelType').value||'').trim(); if(!type) return showMsg('请选择关系类型',false); const name=(document.getElementById('wizRelName').value||'').trim(); const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); const cypher=`MATCH (a) WHERE elementId(a)=$aid MATCH (b) WHERE elementId(b)=$bid CREATE (a)-[r:${type}]->(b) SET r.name=$name RETURN elementId(r) AS id`; const res=await session.run(cypher,{aid:relStart,bid:relEnd,name:name||null}); showMsg('创建关系: '+(res.records[0]?.get('id')||''),true); await session.close(); await driver.close(); closeWizard(); selectedNodeIds=[]; lastMode==='expand'?runExpand():runQuery(); }catch(e){ showMsg(String(e),false) }}
+async function deleteSelectedNode(){ try{ const id=(selectedNodeIds[0]||selNodeId||'').trim(); if(!id) return showMsg('未选择节点',false); const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); await session.run('MATCH (n) WHERE elementId(n)=$id DETACH DELETE n',{id}); await session.close(); await driver.close(); showMsg('删除节点: '+id,true); selectedNodeIds=[]; selNodeId=''; lastMode==='expand'?runExpand():runQuery(); }catch(e){ showMsg(String(e),false) }}
+async function deleteSelectedRel(){ try{ const id=(selEdgeId||'').trim(); if(!id) return showMsg('未选择关系',false); const cfg=await loadConfig(); const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password)); const session=driver.session({database:cfg.database}); await session.run('MATCH ()-[r]->() WHERE elementId(r)=$id DELETE r',{id}); await session.close(); await driver.close(); showMsg('删除关系: '+id,true); selEdgeId=''; lastMode==='expand'?runExpand():runQuery(); }catch(e){ showMsg(String(e),false) }}
+document.getElementById('searchBtn').addEventListener('click',searchNodes);
+document.getElementById('openNodeWizard').addEventListener('click',openNodeWizard);
+document.getElementById('wizardCancel').addEventListener('click',closeWizard);
+document.getElementById('wizardSubmit').addEventListener('click',()=>{ if(wizardMode==='node') submitNodeWizard(); else if(wizardMode==='rel') submitRelWizard(); else if(wizardMode==='nodeManage') submitNodeRename(); });
+document.getElementById('wizardDelete').addEventListener('click',()=>{ if(wizardMode==='nodeManage') submitNodeDelete(); });
+document.getElementById('clearFilters').addEventListener('click',()=>{clearFilters(); lastMode==='expand'?runExpand():runQuery()});
+document.getElementById('clearSelection').addEventListener('click',()=>{selectedNodeIds=[]; showMsg('已清空选择',true)});
+document.getElementById('deleteSelected').addEventListener('click',deleteSelectedNode);
+document.getElementById('deleteSelectedRel').addEventListener('click',deleteSelectedRel);
+document.getElementById('manageSelected').addEventListener('click',()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(id) openNodeManage(id)});
+document.getElementById('pairMode').addEventListener('click',()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(!id) return showMsg('请先在图上选择一个节点',false); pendingRelFromId=id; showMsg('从该节点建立关系，请再选择另一个节点',true)});
+initMeta();
+renderFilters();
+</script>
+</body>
+</html>
