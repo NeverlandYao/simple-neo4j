@@ -131,6 +131,15 @@ function App() {
     return {nodes:[...nodeMap.values()],edges:[...edgeMap.values()]};
   }
 
+  async function detectLocalLlm(){
+    const ports=[3000,5000,8001,8080,8888];
+    for(const p of ports){
+      const url=`http://127.0.0.1:${p}/llm`;
+      try{ const r=await fetch(url,{method:'OPTIONS'}); if(r.ok) return url; }catch(_){ }
+    }
+    return '';
+  }
+
   useEffect(()=>{
     initMeta();
     runQuery();
@@ -209,9 +218,9 @@ function App() {
       interaction:{hover:true},
       nodes:{shape:'dot',size:18},
       edges:{smooth:true, arrows:{to:true}},
-      layout: hierOpt? {hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize'}} : undefined,
       groups:{}
     };
+    if(hierOpt){ options.layout={hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize'}} }
     const labels=[...new Set(nodes.map(n=>n.group))];
     const fixed={Competency:'#d62728',Skill:'#1f77b4',Concept:'#2ca02c',Stage:'#9467bd'};
     labels.forEach((lb,i)=>{const col=fixed[lb]||palette(i); options.groups[lb]={color:{background:col, border:'#333'},font:{color:'#111'}}});
@@ -277,6 +286,17 @@ function App() {
   const [wizNodeName, setWizNodeName] = useState('');
   const [wizRelType, setWizRelType] = useState('');
   const [wizRelName, setWizRelName] = useState('');
+  const [tutorTab, setTutorTab] = useState('qa');
+  const [qaQ, setQaQ] = useState('');
+  const [qaAnswer, setQaAnswer] = useState('');
+  const [skillQ, setSkillQ] = useState('');
+  const [skillResults, setSkillResults] = useState([]);
+  const [selectedSkillId, setSelectedSkillId] = useState('');
+  const [skillPlan, setSkillPlan] = useState('');
+  const [compQ, setCompQ] = useState('');
+  const [compResults, setCompResults] = useState([]);
+  const [selectedCompId, setSelectedCompId] = useState('');
+  const [compGuide, setCompGuide] = useState('');
 
   function openNodeWizard(){
     setWizardMode('node');
@@ -390,6 +410,120 @@ function App() {
       setSelEdgeId('');
       if(lastMode==='expand') runExpand(); else runQuery();
     }catch(e){ setStatus(String(e)); }
+  }
+
+  async function qaFromGraph(){
+    try{
+      const cfg=await loadConfig();
+      const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
+      const session=driver.session({database:cfg.database});
+      const cypher='MATCH (n) WHERE toLower(toString(coalesce(n.name,n.title,n.id,""))) CONTAINS toLower($q) WITH n LIMIT 3 OPTIONAL MATCH (n)-[]-(c:Concept) OPTIONAL MATCH (n)-[]-(s:Skill) OPTIONAL MATCH (n)-[]-(t:Task) OPTIONAL MATCH (n)-[]-(p:Competency) RETURN n AS focus, collect(distinct c)[0..5] AS concepts, collect(distinct s)[0..5] AS skills, collect(distinct t)[0..5] AS tasks, collect(distinct p)[0..5] AS competencies';
+      const res=await session.run(cypher,{q:qaQ});
+      await session.close(); await driver.close();
+      const evidences=res.records.map(r=>{
+        const f=r.get('focus');
+        const focusName=(f?.properties&& (f.properties.name||f.properties.title||f.properties.id))||'';
+        const concepts=(r.get('concepts')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+        const skills=(r.get('skills')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+        const tasks=(r.get('tasks')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+        const comps=(r.get('competencies')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+        return {focus:focusName, concepts, skills, tasks, competencies:comps};
+      });
+      let ep=(cfg.llm_endpoint||'').trim();
+      const key=(cfg.llm_api_key||'').trim();
+      const model=(cfg.llm_model||'Qwen/Qwen3-32B').trim();
+      const evidenceText=evidences.map(e=>{
+        const a=['主题: '+e.focus];
+        if(e.concepts.length) a.push('相关知识: '+e.concepts.join(', '));
+        if(e.skills.length) a.push('关联能力: '+e.skills.join(', '));
+        if(e.tasks.length) a.push('训练任务: '+e.tasks.join(', '));
+        if(e.competencies.length) a.push('涉及素养: '+e.competencies.join(', '));
+        return a.join('\n');
+      }).join('\n\n');
+
+      if(!ep){ ep=await detectLocalLlm(); }
+      if(!ep){ ep='http://127.0.0.1:8001/llm'; }
+      if(ep){
+        const isOpenAIStyle=/modelscope\.cn|openai|\/v1\/?$/i.test(ep);
+        try{
+          if(isOpenAIStyle){
+            const url=ep.replace(/\/$/,'')+'/chat/completions';
+            const headers={'Content-Type':'application/json'}; if(key) headers['Authorization']='Bearer '+key;
+            const body={model, messages:[
+              {role:'system',content:'你是一名基于知识图谱的导师。仅根据提供的证据回答，不要臆造。输出简洁并包含建议。证据为空，给出常识解释。'},
+              {role:'user',content:`问题：${qaQ}\n\n证据：\n${evidenceText}`}
+            ], temperature:0.3, top_p:0.9};
+            const resp=await fetch(url,{method:'POST',headers,body:JSON.stringify(body)});
+            const j=await resp.json();
+            const a=j?.choices?.[0]?.message?.content || j?.answer || j?.data || JSON.stringify(j);
+            setQaAnswer(String(a||''));
+          }else{
+            const headers={'Content-Type':'application/json'}; if(key) headers['Authorization']='Bearer '+key;
+            const body={question:qaQ,evidence:evidences};
+            const resp=await fetch(ep,{method:'POST',headers,body:JSON.stringify(body)});
+            const ct=(resp.headers.get('content-type')||'').toLowerCase();
+            if(ct.includes('application/json')){ const j=await resp.json(); setQaAnswer(String(j.answer||j.data||JSON.stringify(j)||'')); }
+            else { const t=await resp.text(); setQaAnswer(String(t||'')); }
+          }
+        }catch(err){ setQaAnswer(String(err||'LLM 请求失败')); }
+      }
+    }catch(e){ setQaAnswer(String(e)); }
+  }
+
+  async function searchSkills(){
+    try{
+      const cfg=await loadConfig();
+      const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
+      const session=driver.session({database:cfg.database});
+      const res=await session.run('MATCH (s:Skill) WHERE toLower(toString(coalesce(s.name,s.title,s.id,""))) CONTAINS toLower($q) RETURN elementId(s) AS id, labels(s) AS labels, s AS s LIMIT $limit',{q:skillQ,limit:neo4j.int(50)});
+      const list=res.records.map(r=>({id:r.get('id'),labels:r.get('labels'),n:r.get('s')}));
+      await session.close(); await driver.close();
+      setSkillResults(list);
+    }catch(e){ setStatus(String(e)); }
+  }
+
+  async function loadSkillPlan(){
+    try{
+      if(!selectedSkillId){ setSkillPlan('请先选择能力'); return; }
+      const cfg=await loadConfig();
+      const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
+      const session=driver.session({database:cfg.database});
+      const res=await session.run('MATCH (s) WHERE elementId(s)=$id OPTIONAL MATCH (s)-[]-(t:Task) OPTIONAL MATCH (s)-[]-(c:Concept) RETURN s, collect(distinct t)[0..10] AS tasks, collect(distinct c)[0..10] AS concepts',{id:selectedSkillId});
+      await session.close(); await driver.close();
+      const rec=res.records[0];
+      if(!rec){ setSkillPlan('未找到该能力的关联'); return; }
+      const tasks=(rec.get('tasks')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+      const concepts=(rec.get('concepts')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+      const a=[]; if(concepts.length) a.push('建议先掌握知识: '+concepts.join(', ')); if(tasks.length) a.push('训练任务: '+tasks.join(', ')); setSkillPlan(a.join('\n')||'暂无建议');
+    }catch(e){ setSkillPlan(String(e)); }
+  }
+
+  async function searchComps(){
+    try{
+      const cfg=await loadConfig();
+      const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
+      const session=driver.session({database:cfg.database});
+      const res=await session.run('MATCH (c:Competency) WHERE toLower(toString(coalesce(c.name,c.title,c.id,""))) CONTAINS toLower($q) RETURN elementId(c) AS id, labels(c) AS labels, c AS c LIMIT $limit',{q:compQ,limit:neo4j.int(50)});
+      const list=res.records.map(r=>({id:r.get('id'),labels:r.get('labels'),n:r.get('c')}));
+      await session.close(); await driver.close();
+      setCompResults(list);
+    }catch(e){ setStatus(String(e)); }
+  }
+
+  async function loadCompGuide(){
+    try{
+      if(!selectedCompId){ setCompGuide('请先选择素养'); return; }
+      const cfg=await loadConfig();
+      const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
+      const session=driver.session({database:cfg.database});
+      const res=await session.run('MATCH (c) WHERE elementId(c)=$id OPTIONAL MATCH (c)-[]-(i:Indicator) OPTIONAL MATCH (c)-[]-(b:Behavior) RETURN c, collect(distinct i)[0..10] AS indicators, collect(distinct b)[0..10] AS behaviors',{id:selectedCompId});
+      await session.close(); await driver.close();
+      const rec=res.records[0];
+      if(!rec){ setCompGuide('未找到该素养的关联'); return; }
+      const inds=(rec.get('indicators')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+      const behs=(rec.get('behaviors')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
+      const a=[]; if(inds.length) a.push('观察指标: '+inds.join(', ')); if(behs.length) a.push('行为建议: '+behs.join(', ')); setCompGuide(a.join('\n')||'暂无建议');
+    }catch(e){ setCompGuide(String(e)); }
   }
 
   function Filters(){
@@ -529,7 +663,64 @@ function App() {
         React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:searchNodes},'搜索节点')
       ),
       React.createElement(SearchList),
-      React.createElement('div',{className:'text-sm text-neutral-600 mt-2'},status)
+    React.createElement('div',{className:'text-sm text-neutral-600 mt-2'},status)
+    ),
+    React.createElement('div',{className:'rounded-xl border bg-white shadow-sm mt-4 p-4'},
+      React.createElement('div',{className:'flex items-center justify-between mb-2'},
+        React.createElement('div',{className:'text-sm font-medium text-neutral-900'},'AI导师'),
+        React.createElement('div',{className:'flex gap-2'},
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm'+(tutorTab==='qa'?' bg-neutral-900 text-white':''),onClick:()=>setTutorTab('qa')},'知识问答'),
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm'+(tutorTab==='skill'?' bg-neutral-900 text-white':''),onClick:()=>setTutorTab('skill')},'能力训练'),
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm'+(tutorTab==='comp'?' bg-neutral-900 text-white':''),onClick:()=>setTutorTab('comp')},'素养引导')
+        )
+      ),
+      tutorTab==='qa' ? React.createElement('div',null,
+        React.createElement('div',{className:'flex gap-2 items-center mb-2'},
+          React.createElement('input',{placeholder:'提出你的问题',className:'flex-1 px-3 py-2 text-sm rounded-md border',value:qaQ,onChange:e=>setQaQ(e.target.value)}),
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:qaFromGraph},'基于图谱回答')
+        ),
+        React.createElement('pre',{className:'text-sm'},qaAnswer||'')
+      ) : tutorTab==='skill' ? React.createElement('div',null,
+        React.createElement('div',{className:'flex gap-2 items-center mb-2'},
+          React.createElement('input',{placeholder:'搜索能力',className:'flex-1 px-3 py-2 text-sm rounded-md border',value:skillQ,onChange:e=>setSkillQ(e.target.value)}),
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:searchSkills},'搜索能力')
+        ),
+        React.createElement('div',{className:'grid grid-cols-1 md:grid-cols-2 gap-2'},
+          skillResults.map(item=> React.createElement('div',{key:item.id,className:'rounded-md border p-2 flex items-center justify-between'+(selectedSkillId===item.id?' ring-2 ring-neutral-400':'')},
+            React.createElement('div',{className:'flex flex-col'},
+              React.createElement('div',{className:'text-sm font-medium'},(item.n.properties.name||item.n.properties.title||item.id||'')),
+              React.createElement('div',{className:'text-xs text-neutral-500'},(item.labels||[]).join(','))
+            ),
+            React.createElement('div',{className:'flex gap-2'},
+              React.createElement('button',{className:'rounded-md border px-2 py-1 text-xs',onClick:()=>setSelectedSkillId(item.id)},'选择')
+            )
+          ))
+        ),
+        React.createElement('div',{className:'mt-2 flex gap-2'},
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:loadSkillPlan},'生成训练计划')
+        ),
+        React.createElement('pre',{className:'text-sm mt-2'},skillPlan||'')
+      ) : React.createElement('div',null,
+        React.createElement('div',{className:'flex gap-2 items-center mb-2'},
+          React.createElement('input',{placeholder:'搜索素养',className:'flex-1 px-3 py-2 text-sm rounded-md border',value:compQ,onChange:e=>setCompQ(e.target.value)}),
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:searchComps},'搜索素养')
+        ),
+        React.createElement('div',{className:'grid grid-cols-1 md:grid-cols-2 gap-2'},
+          compResults.map(item=> React.createElement('div',{key:item.id,className:'rounded-md border p-2 flex items-center justify-between'+(selectedCompId===item.id?' ring-2 ring-neutral-400':'')},
+            React.createElement('div',{className:'flex flex-col'},
+              React.createElement('div',{className:'text-sm font-medium'},(item.n.properties.name||item.n.properties.title||item.id||'')),
+              React.createElement('div',{className:'text-xs text-neutral-500'},(item.labels||[]).join(','))
+            ),
+            React.createElement('div',{className:'flex gap-2'},
+              React.createElement('button',{className:'rounded-md border px-2 py-1 text-xs',onClick:()=>setSelectedCompId(item.id)},'选择')
+            )
+          ))
+        ),
+        React.createElement('div',{className:'mt-2 flex gap-2'},
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:loadCompGuide},'生成引导建议')
+        ),
+        React.createElement('pre',{className:'text-sm mt-2'},compGuide||'')
+      )
     ),
     React.createElement(Wizard)
   );
