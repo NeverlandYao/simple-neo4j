@@ -67,6 +67,25 @@ class Handler(BaseHTTPRequestHandler):
             f=str((e or {}).get("focus") or "").strip()
             if f:
                 a.append("主题: "+f)
+            ns=e.get("neighbors") or []
+            if ns:
+                a.append("关联节点: "+", ".join([str(x) for x in ns if str(x).strip()]))
+            rs=e.get("relations") or []
+            if rs:
+                a.append("关联关系: "+", ".join([str(x) for x in rs if str(x).strip()]))
+            ls=e.get("links") or []
+            if ls:
+                parts_links=[]
+                for l in ls:
+                    nn=str((l or {}).get("neighborName") or "").strip()
+                    nid=str((l or {}).get("neighborId") or "").strip()
+                    tp=str((l or {}).get("type") or "").strip()
+                    dr=str((l or {}).get("dir") or "").strip()
+                    if nn or nid or tp or dr:
+                        s=f"{tp}:{dr} → {nn} [{nid}]"
+                        parts_links.append(s)
+                if parts_links:
+                    a.append("关联链接: "+" | ".join(parts_links))
             cs=e.get("concepts") or []
             if cs:
                 a.append("相关知识: "+", ".join([str(x) for x in cs if str(x).strip()]))
@@ -94,7 +113,7 @@ class Handler(BaseHTTPRequestHandler):
         body=json.dumps({
             "model": model,
             "messages": [
-                {"role":"system","content":"你是一名基于知识图谱的导师。仅根据提供的证据回答，不要臆造。输出简洁并包含建议。当证据为空时，给出常识解释。"},
+                {"role":"system","content":"你是一名精通素养图谱、能力图谱与知识图谱的智能问答导师。根据提供的图谱数据与其相连的节点作为证据回答问题，不要臆造。输出简洁并包含建议。当证据为空时，给出常识解释。"},
                 {"role":"user","content": f"问题：{question}\n\n证据：\n{evidence_text}"}
             ],
             "temperature": 0.3,

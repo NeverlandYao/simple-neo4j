@@ -417,23 +417,33 @@ function App() {
       const cfg=await loadConfig();
       const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
       const session=driver.session({database:cfg.database});
-      const cypher='MATCH (n) WHERE toLower(toString(coalesce(n.name,n.title,n.id,""))) CONTAINS toLower($q) WITH n LIMIT 3 OPTIONAL MATCH (n)-[]-(c:Concept) OPTIONAL MATCH (n)-[]-(s:Skill) OPTIONAL MATCH (n)-[]-(t:Task) OPTIONAL MATCH (n)-[]-(p:Competency) RETURN n AS focus, collect(distinct c)[0..5] AS concepts, collect(distinct s)[0..5] AS skills, collect(distinct t)[0..5] AS tasks, collect(distinct p)[0..5] AS competencies';
+      const cypher='MATCH (n) WHERE any(prop IN [n.name, n.title, n.id] WHERE toLower(toString(coalesce(prop,""))) CONTAINS toLower($q))\nWITH n LIMIT 3\nOPTIONAL MATCH (n)-[r]-(m)\nWITH elementId(n) AS nid, n, collect(DISTINCT m)[0..20] AS neighbors, collect(DISTINCT type(r))[0..20] AS relTypes, collect({mid: elementId(m), mname: toString(coalesce(m.name,m.title,m.id,"")), type: type(r), dir: CASE WHEN elementId(startNode(r))=elementId(n) THEN "out" ELSE "in" END, rid: elementId(r)})[0..30] AS rels\nOPTIONAL MATCH (n)-[]-(c:Concept)\nOPTIONAL MATCH (n)-[]-(s:Skill)\nOPTIONAL MATCH (n)-[]-(t:Task)\nOPTIONAL MATCH (n)-[]-(p:Competency)\nRETURN nid, n AS focus, neighbors, relTypes, rels, collect(distinct c)[0..5] AS concepts, collect(distinct s)[0..5] AS skills, collect(distinct t)[0..5] AS tasks, collect(distinct p)[0..5] AS competencies';
       const res=await session.run(cypher,{q:qaQ});
       await session.close(); await driver.close();
       const evidences=res.records.map(r=>{
         const f=r.get('focus');
+        const nid=r.get('nid');
         const focusName=(f?.properties&& (f.properties.name||f.properties.title||f.properties.id))||'';
+        const neighbors=(r.get('neighbors')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'').filter(x=>x);
+        const relTypes=(r.get('relTypes')||[]).filter(x=>x);
+        const rels=(r.get('rels')||[]).map(x=>({neighborId:String(x.mid||''),neighborName:String(x.mname||''),type:String(x.type||''),dir:String(x.dir||''),relId:String(x.rid||'')}));
         const concepts=(r.get('concepts')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
         const skills=(r.get('skills')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
         const tasks=(r.get('tasks')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
         const comps=(r.get('competencies')||[]).map(x=> (x.properties&& (x.properties.name||x.properties.title||x.properties.id))||'');
-        return {focus:focusName, concepts, skills, tasks, competencies:comps};
+        return {focusId:String(nid||''), focus:focusName, neighbors, relations:relTypes, links:rels, concepts, skills, tasks, competencies:comps};
       });
       let ep=(cfg.llm_endpoint||'').trim();
       const key=(cfg.llm_api_key||'').trim();
       const model=(cfg.llm_model||'Qwen/Qwen3-32B').trim();
       const evidenceText=evidences.map(e=>{
         const a=['主题: '+e.focus];
+        if(e.neighbors && e.neighbors.length) a.push('关联节点: '+e.neighbors.join(', '));
+        if(e.links && e.links.length){
+          const linkStr=e.links.map(l=> `${l.type}:${l.dir} → ${l.neighborName} [${l.neighborId}]`).join(' | ');
+          a.push('关联链接: '+linkStr);
+        }
+        if(e.relations && e.relations.length) a.push('关联关系: '+e.relations.join(', '));
         if(e.concepts.length) a.push('相关知识: '+e.concepts.join(', '));
         if(e.skills.length) a.push('关联能力: '+e.skills.join(', '));
         if(e.tasks.length) a.push('训练任务: '+e.tasks.join(', '));
