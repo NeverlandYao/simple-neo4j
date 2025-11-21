@@ -218,7 +218,22 @@ function App() {
       interaction:{hover:true},
       nodes:{shape:'dot',size:18},
       edges:{smooth:true, arrows:{to:true}},
-      groups:{}
+      groups:{},
+      manipulation:{
+        enabled:true,
+        addEdge:(data,callback)=>{
+          const from=String(data.from||'');
+          const to=String(data.to||'');
+          if(from && to && from!==to){
+            setWizardMode('rel');
+            setRelStart(from);
+            setRelEnd(to);
+            setWizardOpen(true);
+            setPendingRelFromId('');
+          }
+          if(typeof callback==='function') callback(null);
+        }
+      }
     };
     if(hierOpt){ options.layout={hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize'}} }
     const labels=[...new Set(nodes.map(n=>n.group))];
@@ -233,7 +248,15 @@ function App() {
       setSelNodeId(id);
       setStatus(id?('选中节点: '+id):'');
       setSelectedInfo(id);
-      if(pendingRelFromId && id && pendingRelFromId!==id){ openRelWizard(pendingRelFromId, id); setPendingRelFromId(''); }
+      if(pendingRelFromId && id && pendingRelFromId!==id){
+        if(wizardOpen && wizardMode==='rel'){
+          setRelEnd(id);
+          setPendingRelFromId('');
+        }else{
+          openRelWizard(pendingRelFromId, id);
+          setPendingRelFromId('');
+        }
+      }
     });
     network.on('selectEdge',e=>{
       const id=e.edges[0]||'';
@@ -251,7 +274,12 @@ function App() {
       const next=[...prev];
       if(idx>=0) next.splice(idx,1); else next.push(id);
       setStatus('已选择: '+next.join(', '));
-      if(next.length===2) openRelWizard(next[0], next[1]);
+      if(wizardOpen && wizardMode==='rel' && relStart && !relEnd && id!==relStart){
+        setRelEnd(id);
+        setStatus('起点 '+relStart+' → 终点 '+id);
+      }else if(next.length===2){
+        openRelWizard(next[0], next[1]);
+      }
       return next;
     });
   }
@@ -367,6 +395,7 @@ function App() {
     try{
       const type=(wizRelType||'').trim();
       if(!type){ setStatus('请选择关系类型'); return; }
+      if(!relStart || !relEnd){ setStatus('请选择终点节点'); return; }
       const name=(wizRelName||'').trim();
       const cfg=await loadConfig();
       const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
@@ -660,7 +689,7 @@ function App() {
           React.createElement('button',{className:'rounded-md bg-neutral-900 text-white px-3 py-2 text-sm',onClick:openNodeWizard},'新建节点'),
           React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:deleteSelectedNode},'删除选中节点'),
           React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(id) openNodeManage(id);}},'管理选中节点'),
-          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(!id){ setStatus('请先在图上选择一个节点'); return; } setPendingRelFromId(id); setStatus('从该节点建立关系，请再选择另一个节点');}},'与另一节点建关系'),
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(!id){ setStatus('请先在图上选择一个节点'); return; } setPendingRelFromId(id); setWizardMode('rel'); setRelStart(id); setRelEnd(''); setWizardOpen(true); setStatus('从该节点建立关系：请选择另一个节点并设置关系');}},'与另一节点建关系'),
           React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:deleteSelectedRel},'删除选中关系'),
           React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{ setSelectedNodeIds([]); setStatus('已清空选择'); }},'清空选择')
         )
