@@ -22,7 +22,8 @@ def _load_env(path=".env"):
                 if not s or s.startswith("#") or "=" not in s:
                     continue
                 k,v=s.split("=",1)
-                k=k.strip(); v=v.strip()
+                k=k.strip()
+                v=v.strip()
                 if k and v and k not in os.environ:
                     os.environ[k]=v
     except FileNotFoundError:
@@ -37,7 +38,8 @@ def _load_cfg(path="neo4j-link.txt"):
                 if not s or "=" not in s:
                     continue
                 k,v=s.split("=",1)
-                k=k.strip(); v=v.strip()
+                k=k.strip()
+                v=v.strip()
                 if k:
                     cfg[k]=v
     except FileNotFoundError:
@@ -76,17 +78,47 @@ class Handler(BaseHTTPRequestHandler):
             module_name=(qs.get("module_name") or ["\n"])[0].strip()
             module_id=(qs.get("module_id") or [""])[0].strip()
             include_answer=((qs.get("include_answer") or ["false"]) [0].lower() in ("1","true","yes"))
+            qtype=(qs.get("type") or [""])[0].strip()
+            difficulty=(qs.get("difficulty") or [""])[0].strip()
+            exclude_id=(qs.get("exclude_id") or [""])[0].strip()
+            exclude_qid=(qs.get("exclude_qid") or [""])[0].strip()
             def run(session):
                 if module_name:
                     cypher=("MATCH (cm:ContentModule {name:$name})<-[:TESTS]-(q:Question) "
                             "WHERE coalesce(q.user_result,'') <> 'true' "
-                            "RETURN q ORDER BY q.created_at DESC LIMIT 1")
-                    rec=session.run(cypher,{"name":module_name}).single()
+                            + (" AND q.type = $qtype" if qtype else "")
+                            + (" AND q.difficulty = $difficulty" if difficulty else "")
+                            + (" AND elementId(q) <> $exclude_id" if exclude_id else "")
+                            + (" AND q.qid <> $exclude_qid" if exclude_qid else "")
+                            + " RETURN q ORDER BY q.created_at DESC LIMIT 1")
+                    params={"name":module_name}
+                    if qtype:
+                        params["qtype"]=qtype
+                    if difficulty:
+                        params["difficulty"]=difficulty
+                    if exclude_id:
+                        params["exclude_id"]=exclude_id
+                    if exclude_qid:
+                        params["exclude_qid"]=exclude_qid
+                    rec=session.run(cypher,params).single()
                 elif module_id:
                     cypher=("MATCH (cm) WHERE elementId(cm)=$id MATCH (cm)<-[:TESTS]-(q:Question) "
                             "WHERE coalesce(q.user_result,'') <> 'true' "
-                            "RETURN q ORDER BY q.created_at DESC LIMIT 1")
-                    rec=session.run(cypher,{"id":module_id}).single()
+                            + (" AND q.type = $qtype" if qtype else "")
+                            + (" AND q.difficulty = $difficulty" if difficulty else "")
+                            + (" AND elementId(q) <> $exclude_id" if exclude_id else "")
+                            + (" AND q.qid <> $exclude_qid" if exclude_qid else "")
+                            + " RETURN q ORDER BY q.created_at DESC LIMIT 1")
+                    params={"id":module_id}
+                    if qtype:
+                        params["qtype"]=qtype
+                    if difficulty:
+                        params["difficulty"]=difficulty
+                    if exclude_id:
+                        params["exclude_id"]=exclude_id
+                    if exclude_qid:
+                        params["exclude_qid"]=exclude_qid
+                    rec=session.run(cypher,params).single()
                 else:
                     return {"error":"missing module_name or module_id"}
                 if not rec:
@@ -99,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
                     "content": props.get("content"),
                     "type": props.get("type"),
                     "options": props.get("options"),
+                    "difficulty": props.get("difficulty"),
                 }
                 if include_answer:
                     out["answer"]=props.get("answer")
@@ -110,6 +143,35 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type","application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res or {"error":"neo4j unavailable"}).encode("utf-8"))
+            return
+        if self.path.startswith("/question_stats"):
+            qs=parse_qs(urlparse(self.path).query)
+            module_name=(qs.get("module_name") or ["\n"])[0].strip()
+            module_id=(qs.get("module_id") or [""])[0].strip()
+            def run(session):
+                if module_name:
+                    rec=session.run("MATCH (cm:ContentModule {name:$name})<-[:TESTS]-(q:Question) RETURN count(q) AS total, count(CASE WHEN q.user_result='true' THEN 1 END) AS mastered", {"name":module_name}).single()
+                    rows=session.run("MATCH (cm:ContentModule {name:$name})<-[:TESTS]-(q:Question) RETURN coalesce(q.difficulty,'') AS d, count(q) AS c", {"name":module_name}).data()
+                elif module_id:
+                    rec=session.run("MATCH (cm) WHERE elementId(cm)=$id MATCH (cm)<-[:TESTS]-(q:Question) RETURN count(q) AS total, count(CASE WHEN q.user_result='true' THEN 1 END) AS mastered", {"id":module_id}).single()
+                    rows=session.run("MATCH (cm) WHERE elementId(cm)=$id MATCH (cm)<-[:TESTS]-(q:Question) RETURN coalesce(q.difficulty,'') AS d, count(q) AS c", {"id":module_id}).data()
+                else:
+                    return {"error":"missing module_name or module_id"}
+                total=int(rec.get("total") or 0)
+                mastered=int(rec.get("mastered") or 0)
+                pending=max(0,total-mastered)
+                by_diff={}
+                for r in rows:
+                    d=str(r.get("d") or "")
+                    c=int(r.get("c") or 0)
+                    by_diff[d]=c
+                return {"total":total,"mastered":mastered,"pending":pending,"by_difficulty":by_diff}
+            out=_query_neo4j(run)
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type","application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(out or {"error":"neo4j unavailable"}).encode("utf-8"))
             return
         if self.path.startswith("/health"):
             _load_env()
@@ -156,6 +218,35 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(res or {"error":"neo4j unavailable"}).encode("utf-8"))
             return
+        if self.path == "/zpd_update":
+            length=int(self.headers.get("Content-Length") or 0)
+            body=self.rfile.read(length) if length>0 else b""
+            try:
+                payload=json.loads(body.decode("utf-8") or "{}")
+            except Exception:
+                payload={}
+            node_id=str(payload.get("node_id") or "").strip()
+            def run(session):
+                if not node_id:
+                    return {"error":"missing node_id"}
+                cypher=(
+                    "MATCH (c) WHERE elementId(c)=$id SET c.status=2 "
+                    "WITH c MATCH (c)-[:PREREQUISITE]->(next) "
+                    "OPTIONAL MATCH (pre)-[:PREREQUISITE]->(next) "
+                    "WITH next, collect(coalesce(pre.status,0)) AS sts "
+                    "WHERE size(sts)>0 AND ALL(s IN sts WHERE s=2) "
+                    "SET next.status=1 RETURN collect(elementId(next)) AS unlocked"
+                )
+                rec=session.run(cypher,{"id":node_id}).single()
+                unlocked=list(rec.get("unlocked") or [])
+                return {"ok":True, "unlocked":unlocked}
+            res=_query_neo4j(run)
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type","application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res or {"error":"neo4j unavailable"}).encode("utf-8"))
+            return
         if self.path != "/llm":
             self.send_response(404)
             self._cors()
@@ -178,11 +269,12 @@ class Handler(BaseHTTPRequestHandler):
         model=os.environ.get("MS_MODEL","Qwen/Qwen3-32B").strip()
 
         if not key:
-            self.send_response(500)
+            fallback = "模型不可用，基于已有信息给出简述.\n\n问题:"+question+"\n\n证据:\n"+("\n\n".join(["主题:"+str((e or {}).get("focus") or "") for e in evidence]) or "(无)")
+            self.send_response(200)
             self._cors()
             self.send_header("Content-Type","application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"error":"missing MS_API_KEY"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"answer": fallback, "degraded": True, "error": "missing MS_API_KEY"}).encode("utf-8"))
             return
 
         parts=[]
@@ -200,11 +292,11 @@ class Handler(BaseHTTPRequestHandler):
             ls=e.get("links") or []
             if ls:
                 parts_links=[]
-                for l in ls:
-                    nn=str((l or {}).get("neighborName") or "").strip()
-                    nid=str((l or {}).get("neighborId") or "").strip()
-                    tp=str((l or {}).get("type") or "").strip()
-                    dr=str((l or {}).get("dir") or "").strip()
+                for link in ls:
+                    nn=str((link or {}).get("neighborName") or "").strip()
+                    nid=str((link or {}).get("neighborId") or "").strip()
+                    tp=str((link or {}).get("type") or "").strip()
+                    dr=str((link or {}).get("dir") or "").strip()
                     if nn or nid or tp or dr:
                         s=f"{tp}:{dr} → {nn} [{nid}]"
                         parts_links.append(s)

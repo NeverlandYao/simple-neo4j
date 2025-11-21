@@ -87,7 +87,7 @@ function App() {
       const gN=groupForLabels(n.labels);
       const nOK=hasAnyLabel(n.labels,labelFilter);
       if(!r){
-        if(labelFilter.length===0 || nOK){ if(!nodeMap.has(n.id)) nodeMap.set(n.id,{id:String(n.id),label:labelForNode(n),group:gN,labels:n.labels}); }
+        if(labelFilter.length===0 || nOK){ if(!nodeMap.has(n.id)) nodeMap.set(n.id,{id:String(n.id),label:labelForNode(n),group:gN,labels:n.labels,status:(n.properties&&n.properties.status)}); }
         return;
       }
       const gM=groupForLabels(m?m.labels:[]);
@@ -97,8 +97,8 @@ function App() {
       const eid=String(r.id||`${from}-${to}-${r.type||''}`);
       const tOK=(typeFilter.length===0 || typeFilter.includes(r.type));
       if(tOK && (labelFilter.length===0 || nOK || mOK)){
-        if(!nodeMap.has(n.id)) nodeMap.set(n.id,{id:String(n.id),label:labelForNode(n),group:gN,labels:n.labels});
-        if(m && !nodeMap.has(m.id)) nodeMap.set(m.id,{id:String(m.id),label:labelForNode(m),group:gM,labels:m.labels});
+        if(!nodeMap.has(n.id)) nodeMap.set(n.id,{id:String(n.id),label:labelForNode(n),group:gN,labels:n.labels,status:(n.properties&&n.properties.status)});
+        if(m && !nodeMap.has(m.id)) nodeMap.set(m.id,{id:String(m.id),label:labelForNode(m),group:gM,labels:m.labels,status:(m.properties&&m.properties.status)});
         if(!edgeMap.has(eid)) edgeMap.set(eid,{id:eid,from,to,label:r.type});
       }
     });
@@ -117,7 +117,8 @@ function App() {
         const id=n.elementId ?? (n.identity && (typeof n.identity.toString==='function'?n.identity.toString():String(n.identity)));
         const g=groupForLabels(n.labels);
         const nOK=hasAnyLabel(n.labels,labelFilter);
-        if((labelFilter.length===0 || nOK) && !nodeMap.has(id)) nodeMap.set(id,{id:String(id),label:labelForNode({id,labels:n.labels,properties:n.properties}),group:g,labels:n.labels});
+        const st=(n.properties&&n.properties.status);
+        if((labelFilter.length===0 || nOK) && !nodeMap.has(id)) nodeMap.set(id,{id:String(id),label:labelForNode({id,labels:n.labels,properties:n.properties}),group:g,labels:n.labels,status:st});
       });
       rs.forEach(r=>{
         const id=r.elementId ?? (r.identity && (typeof r.identity.toString==='function'?r.identity.toString():String(r.identity)));
@@ -241,6 +242,7 @@ function App() {
     labels.forEach((lb,i)=>{const col=fixed[lb]||palette(i); options.groups[lb]={color:{background:col, border:'#333'},font:{color:'#111'}}});
     const three=threeLayer;
     const localNodes=nodes.map(n=>({ ...n }));
+    localNodes.forEach(n=>{ const s=n.status; if(s===2){ n.color={background:'#4caf50',border:'#333'}; n.borderWidth=1; } else if(s===1){ n.color={background:'#ffeb3b',border:'#333'}; n.borderWidth=3; } else if(s===0){ n.color={background:'#9e9e9e',border:'#333'}; n.borderWidth=1; } });
     if(three){ localNodes.forEach(n=>{ n.level=levelForLabels(n.labels||[]) }); options.layout={hierarchical:{enabled:true,direction:'UD',sortMethod:'hubsize',levelSeparation:140,nodeSpacing:90}}; options.physics={enabled:false} }
     const network=new vis.Network(container,{nodes:new vis.DataSet(localNodes),edges:new vis.DataSet(edges)},options);
     network.on('selectNode',e=>{
@@ -325,6 +327,103 @@ function App() {
   const [compResults, setCompResults] = useState([]);
   const [selectedCompId, setSelectedCompId] = useState('');
   const [compGuide, setCompGuide] = useState('');
+
+  const [exerciseOpen, setExerciseOpen] = useState(false);
+  const [exerciseModuleName, setExerciseModuleName] = useState('');
+  const [exerciseQuestion, setExerciseQuestion] = useState(null);
+  const [exerciseOptions, setExerciseOptions] = useState([]);
+  const [exerciseAnswer, setExerciseAnswer] = useState('');
+  const [exerciseSelected, setExerciseSelected] = useState('');
+  const [exerciseResult, setExerciseResult] = useState('');
+  const [exerciseType, setExerciseType] = useState('');
+  const [exerciseDifficulty, setExerciseDifficulty] = useState('');
+  const [exerciseStats, setExerciseStats] = useState({total:0, mastered:0, pending:0});
+
+  async function openExercise(){
+    try{
+      const id=(selNodeId||selectedNodeIds[0]||'').trim();
+      if(!id){ setStatus('未选择节点'); return; }
+      const cfg=await loadConfig();
+      const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
+      const session=driver.session({database:cfg.database});
+      const r=await session.run('MATCH (n) WHERE elementId(n)=$id RETURN coalesce(n.name,n.title,n.id,"") AS nm',{id});
+      await session.close(); await driver.close();
+      const nm=(r.records[0]?.get('nm')||'').trim();
+      if(!nm){ setStatus('该节点无名称'); return; }
+      setExerciseModuleName(nm);
+      setExerciseSelected('');
+      setExerciseResult('');
+      setExerciseOpen(true);
+      await loadExerciseQuestion(nm);
+      await loadExerciseStats(nm);
+    }catch(e){ setStatus(String(e)); }
+  }
+
+  async function loadExerciseQuestion(nm){
+    try{
+      let url='http://127.0.0.1:8001/question?module_name='+encodeURIComponent(nm)+'&include_answer=true';
+      if(exerciseType) url += '&type='+encodeURIComponent(exerciseType);
+      if(exerciseDifficulty) url += '&difficulty='+encodeURIComponent(exerciseDifficulty);
+      const resp=await fetch(url);
+      const data=await resp.json();
+      const q=data?.question||null;
+      if(!q){ setExerciseQuestion(null); setExerciseOptions([]); setExerciseAnswer(''); setStatus('暂无题目'); return; }
+      const optsStr=String(q.options||'');
+      const parts=optsStr.split(';').map(s=>s.trim()).filter(s=>s);
+      const opts=parts.map((s,i)=>{
+        const m=s.match(/^([A-Z])\./i); const key=m?(m[1].toUpperCase()):String.fromCharCode(65+i);
+        return {key, text:s.replace(/^([A-Z])\./i,'').trim()||s};
+      });
+      setExerciseQuestion(q);
+      setExerciseOptions(opts);
+      setExerciseAnswer(String(q.answer||'').trim().toUpperCase());
+      setExerciseSelected('');
+      setExerciseResult('');
+    }catch(e){ setStatus(String(e)); }
+  }
+
+  async function loadExerciseStats(nm){
+    try{
+      const url='http://127.0.0.1:8001/question_stats?module_name='+encodeURIComponent(nm);
+      const resp=await fetch(url);
+      const j=await resp.json();
+      const t=parseInt(j.total||0), m=parseInt(j.mastered||0); const p=parseInt(j.pending||Math.max(0,t-m));
+      setExerciseStats({total:t, mastered:m, pending:p});
+    }catch(e){ }
+  }
+
+  async function submitExercise(){
+    try{
+      if(!exerciseQuestion){ setStatus('无题目'); return; }
+      if(!exerciseSelected){ setStatus('请选择一个选项'); return; }
+      const correct=exerciseSelected===exerciseAnswer;
+      const body={question_id:String(exerciseQuestion.id||''), is_correct:correct};
+      const resp=await fetch('http://127.0.0.1:8001/submit_answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      await resp.json();
+      setExerciseResult(correct?('回答正确'):('回答错误'));
+      setStatus(correct?('回答正确'):('回答错误'));
+      if(correct){
+        const nodeId=(selNodeId||selectedNodeIds[0]||'').trim();
+        if(nodeId){
+          try{
+            const r=await fetch('http://127.0.0.1:8001/zpd_update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node_id:nodeId})});
+            const j=await r.json();
+            const unlocked=(j.unlocked||[]).map(String);
+            setNodes(prev=> prev.map(n=>{
+              if(String(n.id)===nodeId) return {...n, status:2};
+              if(unlocked.includes(String(n.id))) return {...n, status:1};
+              return n;
+            }));
+          }catch(_){ }
+        }
+        if(exerciseModuleName){ await loadExerciseStats(exerciseModuleName); }
+      }
+    }catch(e){ setStatus(String(e)); }
+  }
+
+  function closeExercise(){
+    setExerciseOpen(false);
+  }
 
   function openNodeWizard(){
     setWizardMode('node');
@@ -685,14 +784,15 @@ function App() {
     React.createElement('div',{className:'rounded-xl border bg-white shadow-sm mt-4 p-4'},
       React.createElement('div',{className:'flex items-center justify-between mb-2'},
         React.createElement('div',{className:'text-sm font-medium text-neutral-900'},'三步向导'),
-        React.createElement('div',{className:'flex gap-2'},
-          React.createElement('button',{className:'rounded-md bg-neutral-900 text-white px-3 py-2 text-sm',onClick:openNodeWizard},'新建节点'),
-          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:deleteSelectedNode},'删除选中节点'),
-          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(id) openNodeManage(id);}},'管理选中节点'),
-          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(!id){ setStatus('请先在图上选择一个节点'); return; } setPendingRelFromId(id); setWizardMode('rel'); setRelStart(id); setRelEnd(''); setWizardOpen(true); setStatus('从该节点建立关系：请选择另一个节点并设置关系');}},'与另一节点建关系'),
-          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:deleteSelectedRel},'删除选中关系'),
-          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{ setSelectedNodeIds([]); setStatus('已清空选择'); }},'清空选择')
-        )
+      React.createElement('div',{className:'flex gap-2'},
+        React.createElement('button',{className:'rounded-md bg-neutral-900 text-white px-3 py-2 text-sm',onClick:openNodeWizard},'新建节点'),
+        React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:deleteSelectedNode},'删除选中节点'),
+        React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(id) openNodeManage(id);}},'管理选中节点'),
+        React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{const id=(selNodeId||selectedNodeIds[0]||'').trim(); if(!id){ setStatus('请先在图上选择一个节点'); return; } setPendingRelFromId(id); setWizardMode('rel'); setRelStart(id); setRelEnd(''); setWizardOpen(true); setStatus('从该节点建立关系：请选择另一个节点并设置关系');}},'与另一节点建关系'),
+        React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:deleteSelectedRel},'删除选中关系'),
+        React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:openExercise},'开始练习'),
+        React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:()=>{ setSelectedNodeIds([]); setStatus('已清空选择'); }},'清空选择')
+      )
       ),
       React.createElement('div',{className:'text-xs text-neutral-600 mb-2'},'当前选中：', React.createElement('span',null,selectedInfo)),
       React.createElement('div',{className:'text-xs text-neutral-500'},'在下方搜索并选择两个节点后将自动弹出关系表单'),
@@ -710,7 +810,8 @@ function App() {
         React.createElement('div',{className:'flex gap-2'},
           React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm'+(tutorTab==='qa'?' bg-neutral-900 text-white':''),onClick:()=>setTutorTab('qa')},'知识问答'),
           React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm'+(tutorTab==='skill'?' bg-neutral-900 text-white':''),onClick:()=>setTutorTab('skill')},'能力训练'),
-          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm'+(tutorTab==='comp'?' bg-neutral-900 text-white':''),onClick:()=>setTutorTab('comp')},'素养引导')
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm'+(tutorTab==='comp'?' bg-neutral-900 text-white':''),onClick:()=>setTutorTab('comp')},'素养引导'),
+          React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:openExercise},'开始练习')
         )
       ),
       tutorTab==='qa' ? React.createElement('div',null,
@@ -762,6 +863,48 @@ function App() {
       )
     ),
     React.createElement(Wizard)
+    , exerciseOpen && React.createElement('div',{className:'fixed inset-0 z-50 flex items-center justify-center bg-black/30'},
+      React.createElement('div',{className:'rounded-xl border bg-white shadow-lg p-6 w-full max-w-xl'},
+        React.createElement('div',{className:'text-lg font-medium mb-3 flex items-center justify-between'},
+          React.createElement('span',null, exerciseModuleName?('练习: '+exerciseModuleName):'练习'),
+          React.createElement('div',{className:'flex items-center gap-2'},
+            React.createElement('select',{className:'px-2 py-1 text-sm rounded-md border',value:exerciseType,onChange:e=>setExerciseType(e.target.value)},
+              React.createElement('option',{value:''},'全部'),
+              React.createElement('option',{value:'单选题'},'单选题'),
+              React.createElement('option',{value:'判断题'},'判断题')
+            ),
+            React.createElement('select',{className:'px-2 py-1 text-sm rounded-md border',value:exerciseDifficulty,onChange:e=>setExerciseDifficulty(e.target.value)},
+              React.createElement('option',{value:''},'全部难度'),
+              React.createElement('option',{value:'易'},'易'),
+              React.createElement('option',{value:'中'},'中'),
+              React.createElement('option',{value:'难'},'难')
+            ),
+            React.createElement('button',{className:'rounded-md border px-2 py-1 text-sm',onClick:()=>{ if(exerciseModuleName){ loadExerciseQuestion(exerciseModuleName); } }},'筛选'),
+            React.createElement('div',{className:'text-xs text-neutral-600'},`进度 ${exerciseStats.mastered}/${exerciseStats.pending}/${exerciseStats.total}`),
+            React.createElement('button',{className:'rounded-md border px-2 py-1 text-sm',onClick:()=>{ if(exerciseModuleName && exerciseQuestion){ let u='http://127.0.0.1:8001/question?module_name='+encodeURIComponent(exerciseModuleName)+'&include_answer=true'; if(exerciseType) u+='&type='+encodeURIComponent(exerciseType); if(exerciseDifficulty) u+='&difficulty='+encodeURIComponent(exerciseDifficulty); u+='&exclude_id='+encodeURIComponent(String(exerciseQuestion.id||'')); fetch(u).then(r=>r.json()).then(d=>{ const q=d?.question||null; if(q){ const optsStr=String(q.options||''); const parts=optsStr.split(';').map(s=>s.trim()).filter(s=>s); const opts=parts.map((s,i)=>{ const m=s.match(/^([A-Z])\./i); const key=m?(m[1].toUpperCase()):String.fromCharCode(65+i); return {key, text:s.replace(/^([A-Z])\./i,'').trim()||s}; }); setExerciseQuestion(q); setExerciseOptions(opts); setExerciseAnswer(String(q.answer||'').trim().toUpperCase()); setExerciseSelected(''); setExerciseResult(''); } else { setStatus('没有更多题目'); } }).catch(e=>setStatus(String(e))); } }},'换一题')
+          )
+        ),
+        exerciseQuestion ? React.createElement('div',{},
+          React.createElement('div',{className:'text-sm mb-3'}, String(exerciseQuestion.content||'')),
+          React.createElement('div',{className:'space-y-2'},
+            ...exerciseOptions.map(opt=>React.createElement('label',{key:opt.key,className:'flex items-center gap-2 text-sm'},
+              React.createElement('input',{type:'radio',name:'exercise',checked:exerciseSelected===opt.key,onChange:()=>setExerciseSelected(opt.key)}),
+              React.createElement('span',{}, opt.key+'. '+opt.text)
+            ))
+          ),
+          React.createElement('div',{className:'mt-4 flex gap-2'},
+            React.createElement('button',{className:'rounded-md bg-neutral-900 text-white px-3 py-2 text-sm',onClick:submitExercise},'提交答案'),
+            React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:closeExercise},'关闭')
+          ),
+          exerciseResult && React.createElement('div',{className:'mt-3 text-sm'}, exerciseResult + (exerciseQuestion.analysis?('，解析：'+exerciseQuestion.analysis):''))
+        ) : React.createElement('div',{},
+          React.createElement('div',{className:'text-sm text-neutral-600'},'暂无题目'),
+          React.createElement('div',{className:'mt-4 flex gap-2'},
+            React.createElement('button',{className:'rounded-md border px-3 py-2 text-sm',onClick:closeExercise},'关闭')
+          )
+        )
+      )
+    )
   );
 }
 
