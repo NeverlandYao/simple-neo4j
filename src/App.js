@@ -343,19 +343,41 @@ function App() {
     try{
       const id=(selNodeId||selectedNodeIds[0]||'').trim();
       if(!id){ setStatus('未选择节点'); return; }
+      setExerciseOpen(true);
+      setExerciseSelected('');
+      setExerciseResult('');
       const cfg=await loadConfig();
       const driver=neo4j.driver(cfg.url, neo4j.auth.basic(cfg.user||'neo4j', cfg.password));
       const session=driver.session({database:cfg.database});
-      const r=await session.run('MATCH (n) WHERE elementId(n)=$id RETURN coalesce(n.name,n.title,n.id,"") AS nm',{id});
-      await session.close(); await driver.close();
+      const r=await session.run('MATCH (n) WHERE elementId(n)=$id WITH n, labels(n) AS labs OPTIONAL MATCH (n)-[:TESTS]->(cm:ContentModule) RETURN labs, coalesce(n.name,n.title,n.id,n.content,"") AS nm, coalesce(cm.name,"") AS cmn',{id});
+      const labs=(r.records[0]?.get('labs')||[]);
       const nm=(r.records[0]?.get('nm')||'').trim();
-      if(!nm){ setStatus('该节点无名称'); return; }
-      setExerciseModuleName(nm);
-      setExerciseSelected('');
-      setExerciseResult('');
-      setExerciseOpen(true);
-      await loadExerciseQuestion(nm);
-      await loadExerciseStats(nm);
+      const cmn=(r.records[0]?.get('cmn')||'').trim();
+      const moduleName=cmn || nm;
+      if(Array.isArray(labs) && labs.includes('Question')){
+        const qr=await session.run('MATCH (q) WHERE elementId(q)=$id RETURN q',{id});
+        const qrec=qr.records[0];
+        if(qrec){
+          const qnode=qrec.get('q');
+          const props=qnode?.properties||{};
+          const qobj={id:String(id), qid:props.qid, content:props.content, type:props.type, options:props.options, answer:props.answer, analysis:props.analysis, difficulty:props.difficulty};
+          const optsStr=String(qobj.options||'');
+          const parts=optsStr.split(';').map(s=>s.trim()).filter(s=>s);
+          const opts=parts.map((s,i)=>{ const m=s.match(/^([A-Z])\./i); const key=m?(m[1].toUpperCase()):String.fromCharCode(65+i); return {key, text:s.replace(/^([A-Z])\./i,'').trim()||s}; });
+          setExerciseModuleName(moduleName);
+          setExerciseQuestion(qobj);
+          setExerciseOptions(opts);
+          setExerciseAnswer(String(qobj.answer||'').trim().toUpperCase());
+          await loadExerciseStats(moduleName);
+          await session.close(); await driver.close();
+          return;
+        }
+      }
+      if(!moduleName){ setStatus('该节点无名称'); await session.close(); await driver.close(); return; }
+      setExerciseModuleName(moduleName);
+      await loadExerciseQuestion(moduleName);
+      await loadExerciseStats(moduleName);
+      await session.close(); await driver.close();
     }catch(e){ setStatus(String(e)); }
   }
 
@@ -863,10 +885,10 @@ function App() {
       )
     ),
     React.createElement(Wizard)
-    , exerciseOpen && React.createElement('div',{className:'fixed inset-0 z-50 flex items-center justify-center bg-black/30'},
-      React.createElement('div',{className:'rounded-xl border bg-white shadow-lg p-6 w-full max-w-xl'},
-        React.createElement('div',{className:'text-lg font-medium mb-3 flex items-center justify-between'},
-          React.createElement('span',null, exerciseModuleName?('练习: '+exerciseModuleName):'练习'),
+    , exerciseOpen && React.createElement('div',{className:'fixed inset-0 z-50',style:{display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.35)',backdropFilter:'blur(2px)',padding:'24px'},onClick:closeExercise},
+      React.createElement('div',{className:'rounded-xl border bg-white shadow-lg',style:{width:'min(90%, 640px)',maxHeight:'80vh',overflowY:'auto',borderColor:'#e5e7eb',boxShadow:'0 20px 40px rgba(0,0,0,0.18)',padding:'24px'},onClick:(e)=>e.stopPropagation()},
+        React.createElement('div',{className:'mb-4 flex items-center justify-between',style:{borderBottom:'1px solid #eceff1',paddingBottom:'12px'}},
+          React.createElement('div',{className:'text-lg font-medium'}, exerciseModuleName?('练习: '+exerciseModuleName):'练习'),
           React.createElement('div',{className:'flex items-center gap-2'},
             React.createElement('select',{className:'px-2 py-1 text-sm rounded-md border',value:exerciseType,onChange:e=>setExerciseType(e.target.value)},
               React.createElement('option',{value:''},'全部'),
@@ -881,15 +903,18 @@ function App() {
             ),
             React.createElement('button',{className:'rounded-md border px-2 py-1 text-sm',onClick:()=>{ if(exerciseModuleName){ loadExerciseQuestion(exerciseModuleName); } }},'筛选'),
             React.createElement('div',{className:'text-xs text-neutral-600'},`进度 ${exerciseStats.mastered}/${exerciseStats.pending}/${exerciseStats.total}`),
-            React.createElement('button',{className:'rounded-md border px-2 py-1 text-sm',onClick:()=>{ if(exerciseModuleName && exerciseQuestion){ let u='http://127.0.0.1:8001/question?module_name='+encodeURIComponent(exerciseModuleName)+'&include_answer=true'; if(exerciseType) u+='&type='+encodeURIComponent(exerciseType); if(exerciseDifficulty) u+='&difficulty='+encodeURIComponent(exerciseDifficulty); u+='&exclude_id='+encodeURIComponent(String(exerciseQuestion.id||'')); fetch(u).then(r=>r.json()).then(d=>{ const q=d?.question||null; if(q){ const optsStr=String(q.options||''); const parts=optsStr.split(';').map(s=>s.trim()).filter(s=>s); const opts=parts.map((s,i)=>{ const m=s.match(/^([A-Z])\./i); const key=m?(m[1].toUpperCase()):String.fromCharCode(65+i); return {key, text:s.replace(/^([A-Z])\./i,'').trim()||s}; }); setExerciseQuestion(q); setExerciseOptions(opts); setExerciseAnswer(String(q.answer||'').trim().toUpperCase()); setExerciseSelected(''); setExerciseResult(''); } else { setStatus('没有更多题目'); } }).catch(e=>setStatus(String(e))); } }},'换一题')
+            React.createElement('button',{className:'rounded-md border px-2 py-1 text-sm',onClick:()=>{ if(exerciseModuleName && exerciseQuestion){ let u='http://127.0.0.1:8001/question?module_name='+encodeURIComponent(exerciseModuleName)+'&include_answer=true'; if(exerciseType) u+='&type='+encodeURIComponent(exerciseType); if(exerciseDifficulty) u+='&difficulty='+encodeURIComponent(exerciseDifficulty); u+='&exclude_id='+encodeURIComponent(String(exerciseQuestion.id||'')); fetch(u).then(r=>r.json()).then(d=>{ const q=d?.question||null; if(q){ const optsStr=String(q.options||''); const parts=optsStr.split(';').map(s=>s.trim()).filter(s=>s); const opts=parts.map((s,i)=>{ const m=s.match(/^([A-Z])\./i); const key=m?(m[1].toUpperCase()):String.fromCharCode(65+i); return {key, text:s.replace(/^([A-Z])\./i,'').trim()||s}; }); setExerciseQuestion(q); setExerciseOptions(opts); setExerciseAnswer(String(q.answer||'').trim().toUpperCase()); setExerciseSelected(''); setExerciseResult(''); } else { setStatus('没有更多题目'); } }).catch(e=>setStatus(String(e))); } }},'换一题'),
+            React.createElement('button',{className:'rounded-md border px-2 py-1 text-sm',onClick:closeExercise},'关闭')
           )
         ),
         exerciseQuestion ? React.createElement('div',{},
-          React.createElement('div',{className:'text-sm mb-3'}, String(exerciseQuestion.content||'')),
+          React.createElement('div',{style:{fontSize:'16px',lineHeight:'1.7',color:'#111',marginBottom:'16px'}}, String(exerciseQuestion.content||'')),
           React.createElement('div',{className:'space-y-2'},
-            ...exerciseOptions.map(opt=>React.createElement('label',{key:opt.key,className:'flex items-center gap-2 text-sm'},
-              React.createElement('input',{type:'radio',name:'exercise',checked:exerciseSelected===opt.key,onChange:()=>setExerciseSelected(opt.key)}),
-              React.createElement('span',{}, opt.key+'. '+opt.text)
+            ...exerciseOptions.map(opt=>React.createElement('div',{key:opt.key,style:{padding:'12px',border:'1px solid #e5e7eb',borderRadius:'10px',marginBottom:'10px'}},
+              React.createElement('label',{className:'flex items-center gap-2 text-sm',style:{cursor:'pointer',width:'100%'}},
+                React.createElement('input',{type:'radio',name:'exercise',checked:exerciseSelected===opt.key,onChange:()=>setExerciseSelected(opt.key)}),
+                React.createElement('span',{}, opt.key+'. '+opt.text)
+              )
             ))
           ),
           React.createElement('div',{className:'mt-4 flex gap-2'},
