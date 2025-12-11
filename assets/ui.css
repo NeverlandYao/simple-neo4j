@@ -68,3 +68,20 @@ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-se
 .md\:w-48{width:12rem}
 .h-4{height:1rem}
 .w-4{width:1rem}
+.h-screen{height:100vh}
+.flex-col{flex-direction:column}
+.flex-1{flex:1 1 0%}
+.overflow-hidden{overflow:hidden}
+.overflow-y-auto{overflow-y:auto}
+.shrink-0{flex-shrink:0}
+.w-80{width:20rem}
+.w-96{width:24rem}
+.border-r{border-right:1px solid #e5e7eb}
+.border-b{border-bottom:1px solid #e5e7eb}
+.absolute{position:absolute}
+.relative{position:relative}
+.h-full{height:100%}
+.space-y-2 > :not([hidden]) ~ :not([hidden]){margin-top:.5rem}
+.space-y-3 > :not([hidden]) ~ :not([hidden]){margin-top:.75rem}
+.space-y-4 > :not([hidden]) ~ :not([hidden]){margin-top:1rem}
+.space-x-2 > :not([hidden]) ~ :not([hidden]){margin-left:.5rem}
