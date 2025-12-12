@@ -41,10 +41,9 @@ export function idOf(x){ return x && (x.elementId ?? (x.identity && (typeof x.id
 export function toNum(x){ return x && typeof x.toNumber==='function' ? x.toNumber() : x; }
 
 export function mapRecord(record){
-  const has = (k) => record.keys.indexOf(k) !== -1;
-  const n = has('n') ? record.get('n') : null;
-  const r = has('r') ? record.get('r') : null;
-  const m = has('m') ? record.get('m') : null;
+  const n=record.get('n');
+  const r=record.get('r');
+  const m=record.get('m');
   return {
     n: n ? { id:idOf(n), labels:n.labels, properties:n.properties } : null,
     r: r ? { id:idOf(r), type:r.type, start:r.startNodeElementId ?? toNum(r.start), end:r.endNodeElementId ?? toNum(r.end), properties:r.properties } : null,

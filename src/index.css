@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+    /* Custom scrollbar for chat */
+    .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+    }
+    .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+    
+    /* Grid pattern for space background */
+    .bg-grid-pattern {
+        background-image: linear-gradient(rgba(56, 224, 123, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56, 224, 123, 0.05) 1px, transparent 1px);
+        background-size: 40px 40px;
+    }
+}
