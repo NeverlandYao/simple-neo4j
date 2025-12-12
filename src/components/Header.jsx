@@ -1,6 +1,6 @@
 import React from 'react';
 
-export function Header({ databases, currentDb, onDbChange }) {
+export function Header({ databases, currentDb, onDbChange, viewMode, onViewChange }) {
   return (
     <header className="flex items-center justify-between whitespace-nowrap border-b border-white/10 bg-background-dark px-6 py-3 shrink-0 z-50">
       <div className="flex items-center gap-4 text-white">
@@ -25,15 +25,30 @@ export function Header({ databases, currentDb, onDbChange }) {
       </div>
       <div className="flex items-center gap-6">
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-gray-400">
-          <a className="text-white hover:text-primary transition-colors" href="#">仪表盘</a>
-          <a className="hover:text-primary transition-colors" href="#">知识库</a>
-          <a className="hover:text-primary transition-colors" href="#">学习进度</a>
+          <button 
+            onClick={() => onViewChange('graph')}
+            className={`transition-colors ${viewMode === 'graph' ? 'text-primary font-bold' : 'hover:text-primary'}`}
+          >
+            图谱视图
+          </button>
+          <button 
+            onClick={() => onViewChange('knowledge')}
+            className={`transition-colors ${viewMode === 'knowledge' ? 'text-primary font-bold' : 'hover:text-primary'}`}
+          >
+            知识库管理
+          </button>
+          <button 
+            onClick={() => onViewChange('progress')}
+            className={`transition-colors ${viewMode === 'progress' ? 'text-primary font-bold' : 'hover:text-primary'}`}
+          >
+            学习进度
+          </button>
         </nav>
         <div className="h-6 w-px bg-white/10 mx-2"></div>
         <div className="flex items-center gap-3">
           <div className="text-right hidden sm:block">
-            <p className="text-sm font-bold text-white leading-none">Alex Chen</p>
-            <p className="text-xs text-primary mt-1">物理等级 12</p>
+            <p className="text-sm font-bold text-white leading-none">Yao</p>
+            <p className="text-xs text-primary mt-1">Level 12</p>
           </div>
           <div 
             className="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-10 border-2 border-white/10" 
