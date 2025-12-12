@@ -130,3 +130,67 @@ export async function createRelation(fromId, toId, type, dbName) {
     await driver.close();
   }
 }
+
+export async function searchGraph(keywords, dbName) {
+  const { session, driver } = await getSession(dbName);
+  try {
+    // Basic fuzzy search on common text properties
+    // We search for nodes where name, content, or description contains ANY of the keywords
+    // For a better implementation, one would use Fulltext Indexes.
+    
+    // Construct a dynamic OR clause for keywords
+    // Note: This is a simple implementation. 
+    // Ideally, we should pass keywords as a parameter list and use ANY/NONE functions, 
+    // but Neo4j string matching is case-sensitive by default unless configured otherwise or using toLower.
+    
+    const result = await session.run(`
+      WITH $keywords as terms
+      MATCH (n)
+      WHERE ANY(term IN terms WHERE 
+        toLower(n.name) CONTAINS toLower(term) OR 
+        toLower(n.content) CONTAINS toLower(term) OR 
+        toLower(n.description) CONTAINS toLower(term) OR
+        toLower(n.title) CONTAINS toLower(term)
+      )
+      // Return node and its immediate 1-hop neighborhood
+      WITH n LIMIT 5
+      OPTIONAL MATCH (n)-[r]-(m)
+      RETURN n, collect({rel: type(r), node: m, dir: startNode(r) = n}) as neighbors
+    `, { keywords });
+
+    return result.records.map(record => {
+      const node = record.get('n');
+      const neighbors = record.get('neighbors');
+      
+      const props = node.properties || {};
+      const focus = props.name || props.content || props.title || "Unknown Node";
+      
+      // Format neighbors for the LLM
+      const links = neighbors.map(nb => {
+        const otherNode = nb.node;
+        const otherProps = otherNode.properties || {};
+        return {
+          neighborName: otherProps.name || otherProps.content || otherProps.title || "Unknown",
+          neighborId: otherNode.elementId || String(otherNode.identity),
+          type: nb.rel,
+          dir: nb.dir ? '->' : '<-'
+        };
+      });
+
+      return {
+        focus,
+        links,
+        // Helper lists for specific types if needed, but 'links' covers it all generally
+        neighbors: links.map(l => l.neighborName),
+        relations: links.map(l => l.type)
+      };
+    });
+  } catch(err) {
+      console.error("Search failed:", err);
+      return [];
+  } finally {
+    await session.close();
+    await driver.close();
+  }
+}
+

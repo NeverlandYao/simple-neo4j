@@ -2,10 +2,69 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { ChatPanel } from './components/ChatPanel';
 import { GraphPanel } from './components/GraphPanel';
-import { getSession, createNode, deleteNode, updateNode, createRelation, getDatabases } from './utils/neo4j';
+import { KnowledgeBase } from './components/KnowledgeBase';
+import { LearningProgress } from './components/LearningProgress';
+import { TaskMonitor } from './components/TaskMonitor';
+import { getSession, createNode, deleteNode, updateNode, createRelation, getDatabases, searchGraph } from './utils/neo4j';
 import { buildGraphFromRecords, mapRecord } from './utils/helpers';
 
 export default function App() {
+  // App State
+  const [viewMode, setViewMode] = useState('graph'); // 'graph' | 'knowledge' | 'progress'
+  
+  // Background Tasks
+  const [tasks, setTasks] = useState([]);
+
+  // Poll for task updates
+  useEffect(() => {
+    if (tasks.length === 0) return;
+
+    const activeTasks = tasks.filter(t => ['queued', 'running', 'cancelling'].includes(t.status));
+    if (activeTasks.length === 0) return;
+
+    const interval = setInterval(async () => {
+        const updatedTasks = await Promise.all(tasks.map(async (task) => {
+            if (['completed', 'failed', 'cancelled'].includes(task.status)) return task;
+            
+            try {
+                const res = await fetch(`/task_status?task_id=${task.id}`);
+                if (res.ok) {
+                    const status = await res.json();
+                    return { ...task, ...status, id: task.id }; // Merge status
+                }
+            } catch (e) {
+                console.error("Poll failed", e);
+            }
+            return task;
+        }));
+        setTasks(updatedTasks);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [tasks]);
+
+  const handleTaskStart = (taskId, filename) => {
+      setTasks(prev => [...prev, { id: taskId, filename, status: 'queued', message: 'Starting...' }]);
+  };
+
+  const handleCancelTask = async (taskId) => {
+      try {
+          await fetch('/cancel_task', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ task_id: taskId })
+          });
+          // Optimistic update
+          setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'cancelling' } : t));
+      } catch (e) {
+          console.error("Cancel failed", e);
+      }
+  };
+
+  const handleClearTask = (taskId) => {
+      setTasks(prev => prev.filter(t => t.id !== taskId));
+  };
+
   // Graph State
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
@@ -219,7 +278,14 @@ export default function App() {
 
     try {
       // 1. Fetch relevant graph data (evidence)
-      // In a real scenario, we'd search Neo4j for nodes matching the query keywords
+      // Extract keywords (simple split by space)
+      const keywords = text.split(/\s+/).filter(k => k.length > 0);
+      let evidence = [];
+      
+      if (keywords.length > 0) {
+        evidence = await searchGraph(keywords, currentDb);
+        console.log("Retrieved evidence:", evidence);
+      }
       
       // 2. Call LLM API
       const response = await fetch('/llm', {
@@ -227,13 +293,14 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question: text,
-          evidence: [] // Pass evidence if we have retrieval logic
+          evidence: evidence 
         })
       });
       
       const data = await response.json();
       setMessages(prev => [...prev, { role: 'assistant', content: data.answer }]);
     } catch (err) {
+      console.error(err);
       setMessages(prev => [...prev, { role: 'assistant', content: "抱歉，连接 AI 时出现错误。" }]);
     } finally {
       setLoading(false);
@@ -246,6 +313,8 @@ export default function App() {
         databases={databases}
         currentDb={currentDb}
         onDbChange={setCurrentDb}
+        viewMode={viewMode}
+        onViewChange={setViewMode}
       />
       
       <div className="flex flex-1 overflow-hidden relative">
@@ -257,16 +326,28 @@ export default function App() {
           setInputValue={setInputValue}
         />
         
-        <GraphPanel 
-          nodes={nodes}
-          edges={edges}
-          onNodeSelect={(node) => console.log("Selected:", node)}
-          onNodeDoubleClick={handleNodeDoubleClick}
-          onAddNode={handleAddNode}
-          onDeleteNode={handleDeleteNode}
-          onUpdateNode={handleUpdateNode}
-          onAddRelation={handleAddRelation}
-        />
+        {viewMode === 'graph' ? (
+            <GraphPanel 
+              nodes={nodes}
+              edges={edges}
+              onNodeSelect={(node) => console.log("Selected:", node)}
+              onNodeDoubleClick={handleNodeDoubleClick}
+              onAddNode={handleAddNode}
+              onDeleteNode={handleDeleteNode}
+              onUpdateNode={handleUpdateNode}
+              onAddRelation={handleAddRelation}
+             />
+         ) : viewMode === 'knowledge' ? (
+             <KnowledgeBase currentDb={currentDb} onTaskStart={handleTaskStart} />
+         ) : (
+             <LearningProgress currentDb={currentDb} />
+         )}
+
+         <TaskMonitor 
+            tasks={tasks} 
+            onCancelTask={handleCancelTask} 
+            onClearTask={handleClearTask} 
+         />
       </div>
     </div>
   );

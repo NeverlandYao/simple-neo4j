@@ -2,10 +2,30 @@ import os
 import json
 import time
 import ssl
+import base64
+import io
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen, build_opener, HTTPSHandler, install_opener
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, parse_qs
+
+# LightRAG Integration
+lightrag_wrapper = None
+try:
+    import lightrag_wrapper
+except ImportError:
+    pass
+
+# PDF/Docx Extraction
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
+
+try:
+    import docx
+except ImportError:
+    docx = None
 
 neo4j = None
 try:
@@ -73,6 +93,38 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if self.path.startswith("/task_status"):
+            query = urlparse(self.path).query
+            params = parse_qs(query)
+            task_id = params.get("task_id", [None])[0]
+            
+            if not task_id:
+                self.send_response(400)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(b'{"error": "task_id required"}')
+                return
+            
+            if lightrag_wrapper:
+                status = lightrag_wrapper.get_task_status(task_id)
+                if status:
+                    self.send_response(200)
+                    self._cors()
+                    self.send_header("Content-Type","application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(status).encode("utf-8"))
+                else:
+                    self.send_response(404)
+                    self._cors()
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Task not found"}')
+            else:
+                self.send_response(503)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(b'{"error": "LightRAG not available"}')
+            return
+
         if self.path.startswith("/question"):
             qs=parse_qs(urlparse(self.path).query)
             module_name=(qs.get("module_name") or ["\n"])[0].strip()
@@ -190,6 +242,79 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
+        if self.path == "/cancel_task":
+            length=int(self.headers.get("Content-Length") or 0)
+            body=self.rfile.read(length) if length>0 else b""
+            try:
+                payload=json.loads(body.decode("utf-8"))
+                task_id = payload.get("task_id")
+                if not task_id:
+                     raise ValueError("task_id required")
+                
+                if lightrag_wrapper and lightrag_wrapper.cancel_task(task_id):
+                    self.send_response(200)
+                    self._cors()
+                    self.end_headers()
+                    self.wfile.write(b'{"ok": true}')
+                else:
+                    self.send_response(400)
+                    self._cors()
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Task not found or cannot be cancelled"}')
+            except Exception as e:
+                self.send_response(400)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            return
+
+        if self.path == "/upload_doc":
+            length=int(self.headers.get("Content-Length") or 0)
+            body=self.rfile.read(length) if length>0 else b""
+            try:
+                payload=json.loads(body.decode("utf-8"))
+                text = payload.get("text") or ""
+                file_base64 = payload.get("file_base64")
+                filename = payload.get("filename") or ""
+                db_name = payload.get("db_name") or "neo4j"
+            except:
+                text = body.decode("utf-8", errors="ignore")
+                db_name = "neo4j"
+                file_base64 = None
+                filename = "raw_text"
+            
+            if not text and not file_base64:
+                self.send_response(400)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(b'{"error": "empty text or unsupported file type"}')
+                return
+
+            if lightrag_wrapper:
+                try:
+                    # Async insert
+                    if file_base64:
+                        task_id = lightrag_wrapper.submit_indexing_task(file_base64, 'binary', filename, db_name)
+                    else:
+                        task_id = lightrag_wrapper.submit_indexing_task(text, 'text', filename, db_name)
+
+                    self.send_response(200)
+                    self._cors()
+                    self.send_header("Content-Type","application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": True, "message": "Document queued for indexing", "task_id": task_id}).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self._cors()
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            else:
+                self.send_response(503)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(b'{"error": "LightRAG not available"}')
+            return
+
         if self.path == "/submit_answer":
             length=int(self.headers.get("Content-Length") or 0)
             body=self.rfile.read(length) if length>0 else b""
