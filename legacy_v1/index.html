@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Neo4j 图谱查询</title>
+<link rel="stylesheet" href="assets/ui.css">
+<link rel="stylesheet" href="https://unpkg.com/vis-network/styles/vis-network.css">
+</head>
+<body class="h-screen overflow-hidden bg-neutral-50">
+<div id="root" class="h-full w-full"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/neo4j-driver"></script>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script type="module">
+import App from './src/App.js';
+const rootEl = document.getElementById('root');
+ReactDOM.createRoot(rootEl).render(React.createElement(App));
+</script>
+</body>
+</html>
