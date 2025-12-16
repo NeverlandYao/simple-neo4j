@@ -1,0 +1,12 @@
+FROM neo4j:5.15
+
+# Install netcat for health check if needed (optional)
+# RUN apt-get update && apt-get install -y netcat
+
+COPY data.cypher /var/lib/neo4j/import/data.cypher
+COPY neo4j-wrapper.sh /neo4j-wrapper.sh
+RUN chmod +x /neo4j-wrapper.sh
+
+# We override the entrypoint to run our wrapper
+ENTRYPOINT ["/neo4j-wrapper.sh"]
+CMD ["neo4j"]

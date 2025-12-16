@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { getSession } from '../utils/neo4j';
 
-export function LearningProgress({ currentDb }) {
-    const [modules, setModules] = useState([]);
+export function LearningProgress({ currentDb, sessionId }) {
+    const [questions, setQuestions] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [activeModule, setActiveModule] = useState(null); // If set, we are in Quiz mode
+    const [activeQuiz, setActiveQuiz] = useState(false); // If true, we are in Quiz mode
     
     // Quiz State
     const [quizQueue, setQuizQueue] = useState([]);
@@ -14,46 +14,33 @@ export function LearningProgress({ currentDb }) {
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [isCorrect, setIsCorrect] = useState(false);
     const [streak, setStreak] = useState(0);
-    const [isReviewMode, setIsReviewMode] = useState(false);
 
     useEffect(() => {
-        if(currentDb) fetchModulesAndStats();
-    }, [currentDb, activeModule]); // Refresh stats when returning from quiz
+        if(currentDb && !activeQuiz) fetchQuestions();
+    }, [currentDb, activeQuiz]);
 
-    async function fetchModulesAndStats() {
+    async function fetchQuestions() {
         setLoading(true);
         try {
             const { session, driver } = await getSession(currentDb);
-            // Fetch modules
             const res = await session.run(`
-                MATCH (m:ContentModule) 
-                RETURN m, elementId(m) as id 
-                ORDER BY m.created_at DESC
+                MATCH (q:Question)
+                OPTIONAL MATCH (m:Concept)<-[:TESTS]-(q)
+                RETURN q, elementId(q) as id, q.user_result as result, m.name as conceptName
+                ORDER BY q.created_at DESC
             `);
             
-            const mods = [];
-            for (const r of res.records) {
-                const props = r.get('m').properties;
-                const id = r.get('id');
-                
-                const statsRes = await session.run(`
-                    MATCH (m)-[:TESTS]-(q:Question)
-                    WHERE elementId(m) = $id
-                    RETURN 
-                        count(q) as total, 
-                        count(CASE WHEN q.user_result = 'true' THEN 1 END) as mastered
-                `, { id });
-                
-                const stats = statsRes.records[0];
-                mods.push({
+            const qs = res.records.map(r => {
+                const props = r.get('q').properties;
+                return {
                     ...props,
-                    id,
-                    total: stats.get('total').toNumber(),
-                    mastered: stats.get('mastered').toNumber()
-                });
-            }
+                    id: r.get('id'),
+                    user_result: r.get('result'),
+                    conceptName: r.get('conceptName')
+                };
+            });
             
-            setModules(mods);
+            setQuestions(qs);
             await session.close();
             await driver.close();
         } catch (err) {
@@ -63,86 +50,16 @@ export function LearningProgress({ currentDb }) {
         }
     }
 
-    async function startQuiz(module) {
-        console.log("Starting quiz for module:", module);
-        setActiveModule(module);
+    function startPractice(question) {
+        setQuizQueue([question]);
+        setActiveQuiz(true);
         setStreak(0);
-        setQuizLoading(true);
-        
-        try {
-            const { session, driver } = await getSession(currentDb);
-            // Fetch all questions for this module
-            // Explicitly match node by ID first, then pattern
-            const res = await session.run(`
-                MATCH (m) WHERE elementId(m) = $id
-                MATCH (m)-[:TESTS]-(q:Question)
-                RETURN q, elementId(q) as id, q.user_result as result
-                ORDER BY q.created_at DESC
-            `, { id: module.id });
-            
-            let allQuestions = res.records.map(r => {
-                const props = r.get('q').properties;
-                return { 
-                    ...props, 
-                    id: r.get('id'),
-                    user_result: r.get('result')
-                };
-            });
-            
-            console.log("All questions found:", allQuestions.length);
-            
-            await session.close();
-            await driver.close();
-            
-            const isCompleted = module.mastered === module.total && module.total > 0;
-            console.log("Is completed:", isCompleted);
-            setIsReviewMode(isCompleted);
-
-            // Filter questions based on mode
-            // If not completed, prioritize unmastered questions
-            // If completed (Review Mode), include all questions
-            let queue = [];
-            if (!isCompleted) {
-                queue = allQuestions.filter(q => q.user_result !== 'true');
-                console.log("Unmastered questions:", queue.length);
-                // If for some reason all are mastered but stats said otherwise (sync issue), fallback to all
-                if (queue.length === 0 && allQuestions.length > 0) {
-                    console.log("Fallback to all questions");
-                    queue = allQuestions;
-                }
-            } else {
-                queue = allQuestions;
-            }
-
-            // Shuffle queue
-            queue = queue.sort(() => Math.random() - 0.5);
-            console.log("Final queue length:", queue.length);
-            
-            setQuizQueue(queue);
-            
-            if (queue.length > 0) {
-                fetchNextQuestion(queue);
-            } else {
-                console.log("Queue empty, setting currentQuestion null");
-                setCurrentQuestion(null);
-                setQuizLoading(false);
-            }
-            
-        } catch (err) {
-            console.error("Failed to start quiz:", err);
-            setQuizLoading(false);
-        }
+        nextQuestion([question]);
     }
 
-    function fetchNextQuestion(queue = quizQueue) {
+    function nextQuestion(queue = quizQueue) {
         setQuizLoading(true);
-        // Take next question from queue
-        // Note: queue is state, but we might pass it explicitly if it's the first call
-        
-        // We need to work with a copy if we are mutating, but since we are just reading from the front...
-        // Actually, let's just use an index or pop. 
-        // Better: store the remaining queue in state.
-        
+        // If queue is empty, we are done
         if (queue.length === 0) {
             setCurrentQuestion(null);
             setQuizLoading(false);
@@ -157,7 +74,9 @@ export function LearningProgress({ currentDb }) {
         setSelectedOption(null);
         setIsSubmitted(false);
         setIsCorrect(false);
-        setQuizLoading(false);
+        
+        // Simulate loading for effect
+        setTimeout(() => setQuizLoading(false), 500);
     }
 
     async function handleSubmit() {
@@ -176,7 +95,8 @@ export function LearningProgress({ currentDb }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     question_id: currentQuestion.id,
-                    is_correct: correct
+                    is_correct: correct,
+                    session_id: sessionId
                 })
             });
         } catch (err) {
@@ -184,7 +104,7 @@ export function LearningProgress({ currentDb }) {
         }
     }
 
-    if (activeModule) {
+    if (activeQuiz) {
         return (
             <div className="flex flex-col h-full bg-space-black text-white p-6 relative overflow-hidden">
                 {/* Background Decoration */}
@@ -193,19 +113,16 @@ export function LearningProgress({ currentDb }) {
                 {/* Header */}
                 <div className="flex justify-between items-center mb-8 max-w-4xl mx-auto w-full z-10">
                     <button 
-                        onClick={() => setActiveModule(null)}
+                        onClick={() => setActiveQuiz(false)}
                         className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
                     >
                         <span className="material-symbols-outlined">arrow_back</span>
-                        返回概览
+                        返回列表
                     </button>
                     <div className="flex items-center gap-4">
-                        <div className="flex flex-col items-end">
-                            <span className="text-sm text-gray-400">{activeModule.name}</span>
-                            <div className="flex items-center gap-1 text-primary text-xs font-bold">
-                                <span className="material-symbols-outlined text-sm">local_fire_department</span>
-                                {streak} 连对
-                            </div>
+                        <div className="flex items-center gap-1 text-primary text-xs font-bold">
+                            <span className="material-symbols-outlined text-sm">local_fire_department</span>
+                            {streak} 连对
                         </div>
                     </div>
                 </div>
@@ -215,16 +132,15 @@ export function LearningProgress({ currentDb }) {
                     {quizLoading ? (
                         <div className="animate-pulse text-primary flex flex-col items-center gap-4">
                             <span className="material-symbols-outlined text-4xl animate-spin">cyclone</span>
-                            <p>正在获取题目...</p>
+                            <p>正在加载...</p>
                         </div>
                     ) : !currentQuestion ? (
                         <div className="text-center bg-white/5 p-8 rounded-2xl border border-white/10 max-w-md">
                             <span className="material-symbols-outlined text-6xl text-node-gold mb-4">emoji_events</span>
-                            <h2 className="text-2xl font-bold mb-2">恭喜完成!</h2>
-                            <p className="text-gray-400 mb-6">该模块下的所有题目你都已经掌握了。</p>
+                            <h2 className="text-2xl font-bold mb-2">练习完成!</h2>
                             <button 
-                                onClick={() => setActiveModule(null)}
-                                className="px-6 py-2 bg-primary text-black font-bold rounded-lg hover:bg-primary/90 transition-colors"
+                                onClick={() => setActiveQuiz(false)}
+                                className="mt-6 px-6 py-2 bg-primary text-black font-bold rounded-lg hover:bg-primary/90 transition-colors"
                             >
                                 返回列表
                             </button>
@@ -236,13 +152,11 @@ export function LearningProgress({ currentDb }) {
                                 <span className="px-3 py-1 rounded bg-white/10 text-sm font-bold border border-white/10 text-gray-300">
                                     {currentQuestion.type}
                                 </span>
-                                <span className={`px-3 py-1 rounded text-xs font-bold border ${
-                                    currentQuestion.difficulty === '困难' ? 'bg-red-500/20 text-red-400 border-red-500/20' :
-                                    currentQuestion.difficulty === '中等' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/20' :
-                                    'bg-green-500/20 text-green-400 border-green-500/20'
-                                }`}>
-                                    {currentQuestion.difficulty || '普通'}
-                                </span>
+                                {currentQuestion.conceptName && (
+                                    <span className="px-3 py-1 rounded text-xs font-bold bg-node-gold/10 text-node-gold border border-node-gold/20">
+                                        {currentQuestion.conceptName}
+                                    </span>
+                                )}
                             </div>
 
                             {/* Question Body */}
@@ -279,66 +193,70 @@ export function LearningProgress({ currentDb }) {
                                         <button 
                                             key={idx}
                                             onClick={() => !isSubmitted && setSelectedOption(optionLabel)}
-                                            disabled={isSubmitted}
                                             className={itemClass}
+                                            disabled={isSubmitted}
                                         >
-                                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
-                                                isSubmitted && isCorrectAnswer ? 'bg-green-500 text-black' :
-                                                isSubmitted && isSelected && !isCorrectAnswer ? 'bg-red-500 text-white' :
-                                                isSelected ? 'bg-primary text-black' : 'bg-white/10'
-                                            }`}>
+                                            <span className={`w-8 h-8 rounded-full flex items-center justify-center border ${
+                                                isSubmitted && isCorrectAnswer ? 'border-green-400 text-green-400 bg-green-400/10' :
+                                                isSubmitted && isSelected && !isCorrectAnswer ? 'border-red-400 text-red-400 bg-red-400/10' :
+                                                isSelected ? 'border-primary text-primary bg-primary/10' :
+                                                'border-gray-500 text-gray-500'
+                                            } font-bold text-sm`}>
                                                 {optionLabel}
                                             </span>
-                                            <span className="flex-1">{opt.trim().substring(2).trim() || opt.trim()}</span>
-                                            
-                                            {isSubmitted && isCorrectAnswer && <span className="material-symbols-outlined text-green-400">check_circle</span>}
-                                            {isSubmitted && isSelected && !isCorrectAnswer && <span className="material-symbols-outlined text-red-400">cancel</span>}
+                                            <span className="flex-1">{opt.trim().substring(2)}</span> {/* Remove "A. " */}
+                                            {isSubmitted && isCorrectAnswer && (
+                                                <span className="material-symbols-outlined text-green-400">check_circle</span>
+                                            )}
+                                            {isSubmitted && isSelected && !isCorrectAnswer && (
+                                                <span className="material-symbols-outlined text-red-400">cancel</span>
+                                            )}
                                         </button>
                                     );
                                 })}
                             </div>
 
-                            {/* Feedback & Actions */}
-                            {isSubmitted ? (
-                                <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
-                                    <div className={`p-4 rounded-xl mb-6 border ${isCorrect ? 'bg-green-500/10 border-green-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <span className={`material-symbols-outlined ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
-                                                {isCorrect ? 'sentiment_satisfied' : 'sentiment_dissatisfied'}
-                                            </span>
-                                            <span className={`font-bold ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
-                                                {isCorrect ? '回答正确！' : '回答错误'}
-                                            </span>
-                                        </div>
-                                        <p className="text-sm text-gray-300 leading-relaxed">
-                                            <span className="text-gray-500 font-bold mr-2">解析:</span>
-                                            {currentQuestion.analysis || "暂无解析"}
-                                        </p>
+                            {/* Analysis */}
+                            {isSubmitted && (
+                                <div className={`p-4 rounded-xl mb-6 border ${isCorrect ? 'bg-green-500/10 border-green-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
+                                    <div className="flex items-center gap-2 mb-2 font-bold">
+                                        <span className="material-symbols-outlined">
+                                            {isCorrect ? 'sentiment_satisfied' : 'sentiment_dissatisfied'}
+                                        </span>
+                                        {isCorrect ? '回答正确!' : '回答错误'}
                                     </div>
-                                    <div className="flex justify-end">
-                                        <button 
-                                            onClick={() => fetchNextQuestion()}
-                                            className="bg-white text-black px-6 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors flex items-center gap-2 shadow-lg"
-                                        >
-                                            下一题 <span className="material-symbols-outlined">arrow_forward</span>
-                                        </button>
-                                    </div>
+                                    <p className="text-sm text-gray-300 leading-relaxed">
+                                        <span className="text-gray-500 font-bold mr-2">解析:</span>
+                                        {currentQuestion.analysis || "暂无解析"}
+                                    </p>
                                 </div>
-                            ) : (
-                                <div className="flex justify-end">
+                            )}
+
+                            {/* Footer Actions */}
+                            <div className="flex justify-end">
+                                {!isSubmitted ? (
                                     <button 
                                         onClick={handleSubmit}
                                         disabled={!selectedOption}
-                                        className={`px-8 py-3 rounded-xl font-bold transition-all ${
+                                        className={`px-8 py-3 rounded-xl font-bold flex items-center gap-2 transition-all ${
                                             selectedOption 
-                                            ? 'bg-primary text-black hover:bg-primary/90 shadow-lg shadow-primary/20 scale-100' 
-                                            : 'bg-white/5 text-gray-500 cursor-not-allowed scale-95'
+                                                ? 'bg-primary text-black hover:bg-primary/90 shadow-[0_0_20px_rgba(56,224,123,0.4)]' 
+                                                : 'bg-white/10 text-gray-500 cursor-not-allowed'
                                         }`}
                                     >
                                         提交答案
+                                        <span className="material-symbols-outlined">arrow_forward</span>
                                     </button>
-                                </div>
-                            )}
+                                ) : (
+                                    <button 
+                                        onClick={() => nextQuestion()}
+                                        className="px-8 py-3 bg-white/10 text-white rounded-xl font-bold hover:bg-white/20 transition-all flex items-center gap-2"
+                                    >
+                                        完成练习
+                                        <span className="material-symbols-outlined">done_all</span>
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -346,77 +264,83 @@ export function LearningProgress({ currentDb }) {
         );
     }
 
-    // Dashboard View
     return (
-        <div className="flex flex-col h-full bg-space-black text-white p-6 overflow-y-auto">
-            <div className="max-w-6xl mx-auto w-full">
-                <header className="mb-8">
-                    <h2 className="text-3xl font-bold mb-2 flex items-center gap-3">
-                        <span className="material-symbols-outlined text-primary text-4xl">school</span>
-                        学习进度
-                    </h2>
-                    <p className="text-gray-400">选择一个模块开始练习，提升你的知识掌握度。</p>
-                </header>
-
-                {loading ? (
-                    <div className="flex justify-center py-20">
-                        <span className="material-symbols-outlined text-4xl animate-spin text-gray-600">cyclone</span>
+        <div className="p-8 h-full overflow-y-auto bg-space-black">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                    <span className="material-symbols-outlined text-primary text-3xl">school</span>
+                    学习进度
+                </h2>
+                <div className="flex items-center gap-4 text-sm text-gray-400">
+                    <div className="flex items-center gap-1">
+                        <span className="w-3 h-3 rounded-full bg-green-500/20 border border-green-500/50"></span>
+                        已掌握
                     </div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {modules.map(module => {
-                            const progress = module.total > 0 ? Math.round((module.mastered / module.total) * 100) : 0;
-                            const isCompleted = progress === 100 && module.total > 0;
-                            
-                            return (
-                                <div 
-                                    key={module.id}
-                                    className="group bg-[#0B1210] border border-white/10 rounded-2xl p-6 hover:border-primary/50 transition-all hover:shadow-[0_0_20px_rgba(56,224,123,0.1)] relative overflow-hidden"
-                                >
-                                    {/* Progress Bar Background */}
-                                    <div className="absolute bottom-0 left-0 h-1 bg-white/5 w-full">
-                                        <div 
-                                            className="h-full bg-primary transition-all duration-1000 ease-out"
-                                            style={{ width: `${progress}%` }}
-                                        ></div>
-                                    </div>
-
-                                    <div className="flex justify-between items-start mb-4">
-                                        <div className="p-3 bg-white/5 rounded-xl group-hover:bg-primary/20 transition-colors">
-                                            <span className={`material-symbols-outlined text-2xl ${isCompleted ? 'text-node-gold' : 'text-gray-300 group-hover:text-primary'}`}>
-                                                {isCompleted ? 'emoji_events' : 'menu_book'}
-                                            </span>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-2xl font-bold font-mono">{progress}%</div>
-                                            <div className="text-xs text-gray-500">掌握度</div>
-                                        </div>
-                                    </div>
-
-                                    <h3 className="text-xl font-bold mb-2 group-hover:text-primary transition-colors line-clamp-1">{module.name}</h3>
-                                    <div className="flex justify-between items-center text-sm text-gray-400 mb-6">
-                                        <span>{module.category || '未分类'}</span>
-                                        <span>{module.mastered} / {module.total} 题</span>
-                                    </div>
-
-                                    <button 
-                                        onClick={() => startQuiz(module)}
-                                        disabled={module.total === 0}
-                                        className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
-                                            module.total === 0 
-                                            ? 'bg-white/5 text-gray-600 cursor-not-allowed' 
-                                            : 'bg-white/10 hover:bg-primary hover:text-black text-white'
-                                        }`}
-                                    >
-                                        {module.total === 0 ? '暂无题目' : isCompleted ? '再次复习' : '开始练习'}
-                                        {module.total > 0 && <span className="material-symbols-outlined text-lg">arrow_forward</span>}
-                                    </button>
-                                </div>
-                            );
-                        })}
+                    <div className="flex items-center gap-1">
+                        <span className="w-3 h-3 rounded-full bg-white/10 border border-white/20"></span>
+                        未掌握
                     </div>
-                )}
+                </div>
             </div>
+
+            {loading ? (
+                <div className="flex justify-center py-20">
+                    <span className="material-symbols-outlined text-4xl animate-spin text-primary">cyclone</span>
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {questions.map(q => (
+                        <div 
+                            key={q.id}
+                            className={`p-6 rounded-2xl border transition-all relative group overflow-hidden ${
+                                q.user_result === 'true' 
+                                    ? 'bg-[#1e3427]/50 border-green-500/30' 
+                                    : 'bg-white/5 border-white/10 hover:border-primary/50'
+                            }`}
+                        >
+                            <div className="absolute top-0 right-0 p-4">
+                                {q.user_result === 'true' && (
+                                    <span className="material-symbols-outlined text-green-500 text-2xl">check_circle</span>
+                                )}
+                            </div>
+                            
+                            <div className="mb-4">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="px-2 py-0.5 rounded text-xs bg-white/10 border border-white/10 text-gray-300">
+                                        {q.type}
+                                    </span>
+                                    {q.conceptName && (
+                                        <span className="px-2 py-0.5 rounded text-xs bg-node-gold/10 text-node-gold border border-node-gold/20">
+                                            {q.conceptName}
+                                        </span>
+                                    )}
+                                </div>
+                                <h3 className="text-lg font-bold text-white mb-2 line-clamp-2 min-h-[3.5rem]">{q.content}</h3>
+                            </div>
+
+                            <button 
+                                onClick={() => startPractice(q)}
+                                className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors ${
+                                    q.user_result === 'true'
+                                        ? 'bg-white/5 text-gray-400 hover:bg-white/10'
+                                        : 'bg-primary text-black hover:bg-primary/90'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined">
+                                    {q.user_result === 'true' ? 'replay' : 'play_arrow'}
+                                </span>
+                                {q.user_result === 'true' ? '复习' : '开始练习'}
+                            </button>
+                        </div>
+                    ))}
+                    {questions.length === 0 && (
+                        <div className="col-span-full text-center py-20 text-gray-500 opacity-50">
+                            <span className="material-symbols-outlined text-6xl mb-4">quiz</span>
+                            <p>暂无题目</p>
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }

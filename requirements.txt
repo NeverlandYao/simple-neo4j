@@ -1,0 +1,5 @@
+neo4j
+lightrag-hku
+numpy
+pypdf
+python-docx
