@@ -1,38 +1,38 @@
 // 创建信息科技核心素养节点（顶层概念）
 CREATE
-(info_tech:CoreLiteracy {name: '信息科技核心素养', level: '顶层', description: '学生通过信息科技课程学习逐步形成的正确价值观、必备品格和关键能力'}),
+(info_tech:Competency {name: '信息科技核心素养', level: '顶层', description: '学生通过信息科技课程学习逐步形成的正确价值观、必备品格和关键能力'}),
 
 // 创建四大核心素养节点
-(info_consciousness:CoreLiteracy {name: '信息意识', level: '核心素养', description: '个体对信息的敏感度和对信息价值的判断力'}),
-(computational_thinking:CoreLiteracy {name: '计算思维', level: '核心素养', description: '运用计算机科学思想方法解决问题的思维活动'}),
-(digital_learning:CoreLiteracy {name: '数字化学习与创新', level: '核心素养', description: '利用数字化资源工具创造性解决问题的能力'}),
-(info_social_responsibility:CoreLiteracy {name: '信息社会责任', level: '核心素养', description: '信息社会中应尽的文化修养、道德规范责任'}),
+(info_consciousness:Competency {name: '信息意识', level: '核心素养', description: '个体对信息的敏感度和对信息价值的判断力'}),
+(computational_thinking:Competency {name: '计算思维', level: '核心素养', description: '运用计算机科学思想方法解决问题的思维活动'}),
+(digital_learning:Competency {name: '数字化学习与创新', level: '核心素养', description: '利用数字化资源工具创造性解决问题的能力'}),
+(info_social_responsibility:Competency {name: '信息社会责任', level: '核心素养', description: '信息社会中应尽的文化修养、道德规范责任'}),
 
 // 创建信息意识的子维度节点
-(info_perception:SubDimension {name: '信息感知力', level: '子维度', description: '具有一定的信息感知力，熟悉信息呈现与传递方式'}),
-(data_evaluation:SubDimension {name: '数据评估力', level: '子维度', description: '评估数据来源，判断数据可靠性和时效性'}),
-(active_application:SubDimension {name: '主动应用力', level: '子维度', description: '寻找有效数字平台解决问题的意愿'}),
-(science_spirit:SubDimension {name: '崇尚科学精神', level: '子维度', description: '崇尚科学精神、原创精神'}),
-(problem_solving:SubDimension {name: '问题解决力', level: '子维度', description: '自主动手解决问题、掌握核心技术的意识'}),
-(legal_awareness:SubDimension {name: '法律意识', level: '子维度', description: '保护隐私，依法应用信息的意识'}),
+(info_perception:Skill {name: '信息感知力', level: '子维度', description: '具有一定的信息感知力，熟悉信息呈现与传递方式'}),
+(data_evaluation:Skill {name: '数据评估力', level: '子维度', description: '评估数据来源，判断数据可靠性和时效性'}),
+(active_application:Skill {name: '主动应用力', level: '子维度', description: '寻找有效数字平台解决问题的意愿'}),
+(science_spirit:Skill {name: '崇尚科学精神', level: '子维度', description: '崇尚科学精神、原创精神'}),
+(problem_solving:Skill {name: '问题解决力', level: '子维度', description: '自主动手解决问题、掌握核心技术的意识'}),
+(legal_awareness:Skill {name: '法律意识', level: '子维度', description: '保护隐私，依法应用信息的意识'}),
 
 // 创建计算思维的子维度节点
-(solution_design:SubDimension {name: '提出解决方案', level: '子维度', description: '对问题进行抽象、分解、建模，设计算法形成解决方案'}),
-(problem_resolution:SubDimension {name: '尝试解决问题', level: '子维度', description: '模拟、仿真、验证解决过程，优化方案并迁移应用'}),
+(solution_design:Skill {name: '提出解决方案', level: '子维度', description: '对问题进行抽象、分解、建模，设计算法形成解决方案'}),
+(problem_resolution:Skill {name: '尝试解决问题', level: '子维度', description: '模拟、仿真、验证解决过程，优化方案并迁移应用'}),
 
 // 创建课程内容模块节点
-(data_algorithm:ContentModule {name: '数据与编码', level: '内容模块', category: '基础知识'}),
-(online_learning:ContentModule {name: '在线学习与生活', level: '内容模块', category: '应用技能'}),
-(info_security:ContentModule {name: '信息隐私与安全', level: '内容模块', category: '安全素养'}),
-(ai_technology:ContentModule {name: '人工智能与智慧社会', level: '内容模块', category: '前沿技术'})
+(data_algorithm:Concept {name: '数据与编码', level: '内容模块', category: '基础知识'}),
+(online_learning:Concept {name: '在线学习与生活', level: '内容模块', category: '应用技能'}),
+(info_security:Concept {name: '信息隐私与安全', level: '内容模块', category: '安全素养'}),
+(ai_technology:Concept {name: '人工智能与智慧社会', level: '内容模块', category: '前沿技术'})
 
 // 建立核心素养之间的关联关系
 ;
-MATCH (tech:CoreLiteracy {name: '信息科技核心素养'}),
-      (ic:CoreLiteracy {name: '信息意识'}),
-      (ct:CoreLiteracy {name: '计算思维'}),
-      (dl:CoreLiteracy {name: '数字化学习与创新'}),
-      (isr:CoreLiteracy {name: '信息社会责任'})
+MATCH (tech:Competency {name: '信息科技核心素养'}),
+      (ic:Competency {name: '信息意识'}),
+      (ct:Competency {name: '计算思维'}),
+      (dl:Competency {name: '数字化学习与创新'}),
+      (isr:Competency {name: '信息社会责任'})
 CREATE
 (tech)-[:INCLUDES]->(ic),
 (tech)-[:INCLUDES]->(ct),
@@ -45,13 +45,13 @@ CREATE
 
 // 建立信息意识子维度关系
 ;
-MATCH (ic:CoreLiteracy {name: '信息意识'}),
-      (ip:SubDimension {name: '信息感知力'}),
-      (de:SubDimension {name: '数据评估力'}),
-      (aa:SubDimension {name: '主动应用力'}),
-      (ss:SubDimension {name: '崇尚科学精神'}),
-      (ps:SubDimension {name: '问题解决力'}),
-      (la:SubDimension {name: '法律意识'})
+MATCH (ic:Competency {name: '信息意识'}),
+      (ip:Skill {name: '信息感知力'}),
+      (de:Skill {name: '数据评估力'}),
+      (aa:Skill {name: '主动应用力'}),
+      (ss:Skill {name: '崇尚科学精神'}),
+      (ps:Skill {name: '问题解决力'}),
+      (la:Skill {name: '法律意识'})
 CREATE
 (ic)-[:HAS_DIMENSION]->(ip),
 (ic)-[:HAS_DIMENSION]->(de),
@@ -62,9 +62,9 @@ CREATE
 
 // 建立计算思维子维度关系
 ;
-MATCH (ct:CoreLiteracy {name: '计算思维'}),
-      (sd:SubDimension {name: '提出解决方案'}),
-      (pr:SubDimension {name: '尝试解决问题'})
+MATCH (ct:Competency {name: '计算思维'}),
+      (sd:Skill {name: '提出解决方案'}),
+      (pr:Skill {name: '尝试解决问题'})
 CREATE
 (ct)-[:HAS_DIMENSION]->(sd),
 (ct)-[:HAS_DIMENSION]->(pr),
@@ -72,14 +72,14 @@ CREATE
 
 // 建立素养与课程内容的对应关系
 ;
-MATCH (ic:CoreLiteracy {name: '信息意识'}),
-      (ct:CoreLiteracy {name: '计算思维'}),
-      (dl:CoreLiteracy {name: '数字化学习与创新'}),
-      (isr:CoreLiteracy {name: '信息社会责任'}),
-      (da:ContentModule {name: '数据与编码'}),
-      (ol:ContentModule {name: '在线学习与生活'}),
-      (isec:ContentModule {name: '信息隐私与安全'}),
-      (ai:ContentModule {name: '人工智能与智慧社会'})
+MATCH (ic:Competency {name: '信息意识'}),
+      (ct:Competency {name: '计算思维'}),
+      (dl:Competency {name: '数字化学习与创新'}),
+      (isr:Competency {name: '信息社会责任'}),
+      (da:Concept {name: '数据与编码'}),
+      (ol:Concept {name: '在线学习与生活'}),
+      (isec:Concept {name: '信息隐私与安全'}),
+      (ai:Concept {name: '人工智能与智慧社会'})
 CREATE
 (ic)-[:DEVELOPED_BY]->(ol),
 (ic)-[:DEVELOPED_BY]->(isec),
@@ -93,21 +93,21 @@ CREATE
 // 创建学段节点并建立关系
 ;
 CREATE
-(lower_primary:GradeLevel {name: '小学低段', focus: '信息生活体验'}),
-(upper_primary:GradeLevel {name: '小学中高段', focus: '信息概念及基本原理掌握'}),
-(junior_high:GradeLevel {name: '初中', focus: '与生活情境联结，接触计算机科学概念'}),
-(senior_high:GradeLevel {name: '高中', focus: '发现问题、创造性思考、表达解决方案能力'})
+(lower_primary:Event {name: '小学低段', focus: '信息生活体验'}),
+(upper_primary:Event {name: '小学中高段', focus: '信息概念及基本原理掌握'}),
+(junior_high:Event {name: '初中', focus: '与生活情境联结，接触计算机科学概念'}),
+(senior_high:Event {name: '高中', focus: '发现问题、创造性思考、表达解决方案能力'})
 
 // 建立学段与核心素养的发展关系
 ;
-MATCH (lp:GradeLevel {name: '小学低段'}),
-      (up:GradeLevel {name: '小学中高段'}),
-      (jh:GradeLevel {name: '初中'}),
-      (sh:GradeLevel {name: '高中'}),
-      (ic:CoreLiteracy {name: '信息意识'}),
-      (ct:CoreLiteracy {name: '计算思维'}),
-      (dl:CoreLiteracy {name: '数字化学习与创新'}),
-      (isr:CoreLiteracy {name: '信息社会责任'})
+MATCH (lp:Event {name: '小学低段'}),
+      (up:Event {name: '小学中高段'}),
+      (jh:Event {name: '初中'}),
+      (sh:Event {name: '高中'}),
+      (ic:Competency {name: '信息意识'}),
+      (ct:Competency {name: '计算思维'}),
+      (dl:Competency {name: '数字化学习与创新'}),
+      (isr:Competency {name: '信息社会责任'})
 CREATE
 (lp)-[:DEVELOPS {weight: 0.3}]->(ic),
 (lp)-[:DEVELOPS {weight: 0.1}]->(ct),
@@ -126,10 +126,10 @@ CREATE
 RETURN
 '信息科技核心素养图谱创建完成' as result,
 COUNT { MATCH (n) } as total_nodes,
-COUNT { MATCH (n:CoreLiteracy) } as core_literacy_nodes,
-COUNT { MATCH (n:SubDimension) } as subdimension_nodes,
-COUNT { MATCH (n:ContentModule) } as content_module_nodes,
-COUNT { MATCH (n:GradeLevel) } as grade_level_nodes;
+COUNT { MATCH (n:Competency) } as core_literacy_nodes,
+COUNT { MATCH (n:Skill) } as subdimension_nodes,
+COUNT { MATCH (n:Concept) } as content_module_nodes,
+COUNT { MATCH (n:Event) } as grade_level_nodes;
 
 // 批量为课程内容模块添加题目
 UNWIND [
@@ -207,7 +207,7 @@ UNWIND [
 ] AS data
 
 // 1. 查找对应的课程模块节点
-MATCH (cm:ContentModule {name: data.target})
+MATCH (cm:Concept {name: data.target})
 
 // 2. 创建题目节点
 CREATE (q:Question {

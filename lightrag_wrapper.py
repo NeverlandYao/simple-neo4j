@@ -82,9 +82,9 @@ def get_neo4j_config():
     return cfg
 
 neo4j_cfg = get_neo4j_config()
-NEO4J_URI = neo4j_cfg.get("url", "neo4j://127.0.0.1:7687")
-NEO4J_USER = neo4j_cfg.get("user", "neo4j")
-NEO4J_PASSWORD = neo4j_cfg.get("password", "")
+NEO4J_URI = os.environ.get("NEO4J_URI") or neo4j_cfg.get("url", "neo4j://127.0.0.1:7687")
+NEO4J_USER = os.environ.get("NEO4J_USER") or neo4j_cfg.get("user", "neo4j")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD") or neo4j_cfg.get("password", "")
 
 WORKING_DIR = "./lightrag_data"
 if not os.path.exists(WORKING_DIR):
@@ -109,176 +109,105 @@ except ImportError:
 
 # ... imports ...
 
+# Global LightRAG Instance
 rag_instances = {}
-
-# Async Task Management
-task_registry = {}
-loop = None
-loop_thread = None
-
-def start_loop():
-    global loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
-def ensure_loop():
-    global loop_thread, loop
-    if loop_thread is None or not loop_thread.is_alive():
-        loop_thread = threading.Thread(target=start_loop, daemon=True)
-        loop_thread.start()
-        # Wait for loop to be initialized
-        while loop is None:
-            time.sleep(0.1)
+rag_lock = asyncio.Lock()
 
 async def get_rag(db_name="neo4j"):
-    # ... existing get_rag logic ...
     global rag_instances
-    if db_name in rag_instances:
-        return rag_instances[db_name]
+    async with rag_lock:
+        if db_name in rag_instances:
+            return rag_instances[db_name]
         
-    db_working_dir = os.path.join(WORKING_DIR, db_name)
-    if not os.path.exists(db_working_dir):
-        os.makedirs(db_working_dir)
+        db_working_dir = os.path.join(WORKING_DIR, db_name)
+        if not os.path.exists(db_working_dir):
+            os.makedirs(db_working_dir)
 
-    rag = LightRAG(
-        working_dir=db_working_dir,
-        llm_model_func=modelscope_llm,
-        embedding_func=EmbeddingFunc(
-            embedding_dim=1536, # OpenAI standard
-            max_token_size=8192,
-            func=modelscope_embedding
-        ),
-        kg_store_type="Neo4JStorage",
-        kg_store_kwargs={
-            "url": NEO4J_URI,
-            "username": NEO4J_USER,
-            "password": NEO4J_PASSWORD,
-            "database": db_name
-        }
-    )
-    rag_instances[db_name] = rag
-    return rag
-
-def submit_indexing_task(content, file_type, filename, db_name="neo4j"):
-    ensure_loop()
-    task_id = str(uuid.uuid4())
-    
-    async def _job():
         try:
-            task_registry[task_id]['status'] = 'running'
-            task_registry[task_id]['message'] = 'Parsing document...'
-            
-            text = ""
-            
-            # Parse Content
-            if file_type == 'text':
-                 text = content
-            elif file_type == 'binary':
-                 try:
-                     # Decode Base64 content
-                     # Content format: "data:application/pdf;base64,JVBERi..."
-                     if "," in content:
-                         content = content.split(",")[1]
-                     
-                     file_data = base64.b64decode(content)
-                     f = io.BytesIO(file_data)
-                     ext = os.path.splitext(filename)[1].lower()
-                     
-                     if ext == '.pdf' and pypdf:
-                         pdf = pypdf.PdfReader(f)
-                         text = "\n".join([p.extract_text() for p in pdf.pages])
-                     elif ext == '.docx' and docx:
-                         doc = docx.Document(f)
-                         text = "\n".join([p.text for p in doc.paragraphs])
-                     else:
-                         # Fallback for plain text files
-                         text = file_data.decode("utf-8", errors="ignore")
-                 except Exception as e:
-                     raise ValueError(f"File parsing failed: {str(e)}")
-
-            if not text.strip():
-                 raise ValueError("Extracted text is empty")
-
-            task_registry[task_id]['message'] = 'Initializing LightRAG...'
-            rag = await get_rag(db_name)
-            
-            task_registry[task_id]['message'] = 'Indexing content...'
-            await rag.ainsert(text)
-            
-            task_registry[task_id]['status'] = 'completed'
-            task_registry[task_id]['message'] = 'Done'
-            task_registry[task_id]['progress'] = 100
-        except asyncio.CancelledError:
-            task_registry[task_id]['status'] = 'cancelled'
-            task_registry[task_id]['message'] = 'Cancelled by user'
+            print(f"Initializing LightRAG for {db_name}...")
+            rag = LightRAG(
+                working_dir=db_working_dir,
+                llm_model_func=modelscope_llm,
+                embedding_func=EmbeddingFunc(
+                    embedding_dim=1536,
+                    max_token_size=8192,
+                    func=modelscope_embedding
+                ),
+                kg_store_type="Neo4JStorage",
+                kg_store_kwargs={
+                    "url": NEO4J_URI,
+                    "username": NEO4J_USER,
+                    "password": NEO4J_PASSWORD,
+                    "database": db_name
+                },
+                log_level="INFO"
+            )
+            rag_instances[db_name] = rag
+            print(f"LightRAG Initialized Successfully for {db_name}")
+            return rag
         except Exception as e:
-            task_registry[task_id]['status'] = 'failed'
-            task_registry[task_id]['message'] = f"Error: {str(e)}"
-            logging.error(f"Task {task_id} failed: {e}")
+            print(f"Failed to initialize LightRAG: {e}")
+            return None
 
-    task_registry[task_id] = {
+# Task Queue System
+tasks = {} # id -> {status, result, error, filename, type}
+
+def background_indexing_task(task_id, content, type, filename, db_name):
+    # This runs in a separate thread
+    async def _run():
+        try:
+            tasks[task_id]['status'] = 'running'
+            rag = await get_rag(db_name)
+            if not rag:
+                raise Exception("LightRAG initialization failed")
+            
+            print(f"Starting indexing for {filename}...")
+            await rag.ainsert(content)
+            
+            tasks[task_id]['status'] = 'completed'
+            tasks[task_id]['message'] = 'Indexing completed successfully'
+            print(f"Indexing completed for {filename}")
+        except Exception as e:
+            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['error'] = str(e)
+            print(f"Indexing failed for {filename}: {e}")
+
+    # Create new event loop for the thread if needed, or use run
+    try:
+        asyncio.run(_run())
+    except Exception as e:
+        tasks[task_id]['status'] = 'failed'
+        tasks[task_id]['error'] = str(e)
+
+def submit_indexing_task(content, type, filename, db_name="neo4j"):
+    task_id = str(uuid.uuid4())
+    tasks[task_id] = {
+        'id': task_id,
         'status': 'queued',
-        'message': 'Queued for processing...',
-        'progress': 0,
+        'filename': filename,
         'created_at': time.time()
     }
     
-    # Submit to the persistent loop
-    future = asyncio.run_coroutine_threadsafe(_job(), loop)
-    task_registry[task_id]['future'] = future
+    # Handle base64 decoding if needed
+    if type == 'binary' and pypdf:
+        # Decode base64 to bytes
+        # This part should be moved to inside the thread to avoid blocking
+        pass
+
+    thread = threading.Thread(target=background_indexing_task, args=(task_id, content, type, filename, db_name))
+    thread.daemon = True
+    thread.start()
     
     return task_id
 
-def submit_insert_task(text, db_name="neo4j"):
-    # Compatibility wrapper
-    return submit_indexing_task(text, 'text', 'raw_text', db_name)
+def get_task_status(task_id):
+    return tasks.get(task_id)
 
 def cancel_task(task_id):
-    if task_id in task_registry:
-        task = task_registry[task_id]
-        if task['status'] in ['queued', 'running']:
-            future = task.get('future')
-            if future:
-                future.cancel()
-            task['status'] = 'cancelling'
-            task['message'] = 'Cancelling...'
+    # Simple implementation: just mark as cancelled if not running
+    if task_id in tasks:
+        if tasks[task_id]['status'] == 'queued':
+            tasks[task_id]['status'] = 'cancelled'
             return True
     return False
-
-def get_task_status(task_id):
-    if task_id not in task_registry:
-        return None
-    
-    task = task_registry[task_id]
-    return {
-        'task_id': task_id,
-        'status': task['status'],
-        'message': task['message'],
-        'progress': task.get('progress', 0),
-        'created_at': task['created_at']
-    }
-
-# Sync wrapper for query (still uses run_coroutine_threadsafe to reuse the loop if we wanted, 
-# but for query we usually want to wait for result. For now let's keep it simple using asyncio.run 
-# OR reuse the loop to avoid conflicts if LightRAG is not thread safe with multiple loops)
-def query_text(query, mode="global", db_name="neo4j"):
-    # Reuse the same loop for safety
-    ensure_loop()
-    async def _run():
-        rag = await get_rag(db_name)
-        return await rag.aquery(query, param=QueryParam(mode=mode))
-        
-    future = asyncio.run_coroutine_threadsafe(_run(), loop)
-    return future.result()
-
-# Legacy insert_text replaced by submit_insert_task, but kept for compatibility if needed (blocking)
-def insert_text(text, db_name="neo4j"):
-    # Forward to async task and wait
-    task_id = submit_insert_task(text, db_name)
-    while True:
-        status = get_task_status(task_id)
-        if status['status'] in ['completed', 'failed', 'cancelled']:
-            break
-        time.sleep(0.5)
 

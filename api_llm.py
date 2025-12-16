@@ -4,6 +4,7 @@ import time
 import ssl
 import base64
 import io
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen, build_opener, HTTPSHandler, install_opener
 from urllib.error import HTTPError, URLError
@@ -68,10 +69,10 @@ def _load_cfg(path="neo4j-link.txt"):
 
 def _query_neo4j(fn):
     cfg=_load_cfg()
-    uri=cfg.get("url") or "neo4j://127.0.0.1:7687"
-    user=cfg.get("user") or "neo4j"
-    password=cfg.get("password") or ""
-    database=cfg.get("database") or None
+    uri=os.environ.get("NEO4J_URI") or cfg.get("url") or "neo4j://127.0.0.1:7687"
+    user=os.environ.get("NEO4J_USER") or cfg.get("user") or "neo4j"
+    password=os.environ.get("NEO4J_PASSWORD") or cfg.get("password") or ""
+    database=os.environ.get("NEO4J_DATABASE") or cfg.get("database") or None
     if neo4j is None:
         return None
     driver=neo4j.GraphDatabase.driver(uri, auth=(user, password))
@@ -80,6 +81,39 @@ def _query_neo4j(fn):
             return fn(session)
     finally:
         driver.close()
+
+def _log_dialogue(session_id, role, content):
+    if not session_id: return
+    def run(session):
+        cypher = """
+        MERGE (s:ExperimentSession {id: $sid})
+        ON CREATE SET s.start_time = datetime()
+        CREATE (l:DialogueLog {
+            role: $role,
+            content: $content,
+            timestamp: datetime()
+        })
+        CREATE (s)-[:HAS_LOG]->(l)
+        """
+        session.run(cypher, {"sid": session_id, "role": role, "content": content})
+    _query_neo4j(run)
+
+def _log_learning(session_id, question_id, is_correct):
+    if not session_id: return
+    def run(session):
+        cypher = """
+        MERGE (s:ExperimentSession {id: $sid})
+        ON CREATE SET s.start_time = datetime()
+        MATCH (q:Question) WHERE elementId(q) = $qid OR q.id = $qid
+        CREATE (l:LearningLog {
+            is_correct: $correct,
+            timestamp: datetime()
+        })
+        CREATE (s)-[:HAS_LEARNING_LOG]->(l)
+        CREATE (l)-[:RELATED_TO]->(q)
+        """
+        session.run(cypher, {"sid": session_id, "qid": question_id, "correct": is_correct})
+    _query_neo4j(run)
 
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
@@ -136,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
             exclude_qid=(qs.get("exclude_qid") or [""])[0].strip()
             def run(session):
                 if module_name:
-                    cypher=("MATCH (cm:ContentModule {name:$name})<-[:TESTS]-(q:Question) "
+                    cypher=("MATCH (cm:Concept {name:$name})<-[:TESTS]-(q:Question) "
                             "WHERE coalesce(q.user_result,'') <> 'true' "
                             + (" AND q.type = $qtype" if qtype else "")
                             + (" AND q.difficulty = $difficulty" if difficulty else "")
@@ -202,8 +236,8 @@ class Handler(BaseHTTPRequestHandler):
             module_id=(qs.get("module_id") or [""])[0].strip()
             def run(session):
                 if module_name:
-                    rec=session.run("MATCH (cm:ContentModule {name:$name})<-[:TESTS]-(q:Question) RETURN count(q) AS total, count(CASE WHEN q.user_result='true' THEN 1 END) AS mastered", {"name":module_name}).single()
-                    rows=session.run("MATCH (cm:ContentModule {name:$name})<-[:TESTS]-(q:Question) RETURN coalesce(q.difficulty,'') AS d, count(q) AS c", {"name":module_name}).data()
+                    rec=session.run("MATCH (cm:Concept {name:$name})<-[:TESTS]-(q:Question) RETURN count(q) AS total, count(CASE WHEN q.user_result='true' THEN 1 END) AS mastered", {"name":module_name}).single()
+                    rows=session.run("MATCH (cm:Concept {name:$name})<-[:TESTS]-(q:Question) RETURN coalesce(q.difficulty,'') AS d, count(q) AS c", {"name":module_name}).data()
                 elif module_id:
                     rec=session.run("MATCH (cm) WHERE elementId(cm)=$id MATCH (cm)<-[:TESTS]-(q:Question) RETURN count(q) AS total, count(CASE WHEN q.user_result='true' THEN 1 END) AS mastered", {"id":module_id}).single()
                     rows=session.run("MATCH (cm) WHERE elementId(cm)=$id MATCH (cm)<-[:TESTS]-(q:Question) RETURN coalesce(q.difficulty,'') AS d, count(q) AS c", {"id":module_id}).data()
@@ -325,6 +359,12 @@ class Handler(BaseHTTPRequestHandler):
             question_id=str(payload.get("question_id") or "").strip()
             qid=str(payload.get("qid") or "").strip()
             is_correct=bool(payload.get("is_correct"))
+            session_id=str(payload.get("session_id") or "").strip()
+            
+            # Log learning event
+            if session_id:
+                _log_learning(session_id, question_id or qid, is_correct)
+
             def run(session):
                 if qid:
                     cypher="MATCH (q:Question {qid:$qid}) SET q.user_result=$res RETURN q"
@@ -387,6 +427,11 @@ class Handler(BaseHTTPRequestHandler):
             payload={}
         question=str(payload.get("question") or "").strip()
         evidence=list(payload.get("evidence") or [])
+        session_id=str(payload.get("session_id") or "").strip()
+
+        # Log User Question
+        if session_id and question:
+            _log_dialogue(session_id, "user", question)
 
         _load_env()
         base=os.environ.get("MS_BASE_URL","https://api-inference.modelscope.cn/v1").rstrip("/")
@@ -502,6 +547,10 @@ class Handler(BaseHTTPRequestHandler):
                 answer=str((j.get("choices") or [{}])[0].get("message",{}).get("content") or j.get("answer") or j.get("data") or json.dumps(j))
         else:
             answer=data.decode("utf-8",errors="ignore")
+
+        # Log AI Answer
+        if session_id and answer:
+            _log_dialogue(session_id, "assistant", answer)
 
         self.send_response(200)
         self._cors()

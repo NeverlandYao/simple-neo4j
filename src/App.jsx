@@ -8,9 +8,21 @@ import { TaskMonitor } from './components/TaskMonitor';
 import { getSession, createNode, deleteNode, updateNode, createRelation, getDatabases, searchGraph } from './utils/neo4j';
 import { buildGraphFromRecords, mapRecord } from './utils/helpers';
 
+// Simple UUID generator for session tracking
+function generateSessionId() {
+  return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+}
+
 export default function App() {
   // App State
   const [viewMode, setViewMode] = useState('graph'); // 'graph' | 'knowledge' | 'progress'
+  const [sessionId] = useState(() => {
+    const existing = localStorage.getItem('experiment_session_id');
+    if (existing) return existing;
+    const newId = generateSessionId();
+    localStorage.setItem('experiment_session_id', newId);
+    return newId;
+  });
   
   // Background Tasks
   const [tasks, setTasks] = useState([]);
@@ -293,7 +305,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question: text,
-          evidence: evidence 
+          evidence: evidence,
+          session_id: sessionId
         })
       });
       
@@ -340,7 +353,7 @@ export default function App() {
          ) : viewMode === 'knowledge' ? (
              <KnowledgeBase currentDb={currentDb} onTaskStart={handleTaskStart} />
          ) : (
-             <LearningProgress currentDb={currentDb} />
+             <LearningProgress currentDb={currentDb} sessionId={sessionId} />
          )}
 
          <TaskMonitor 
