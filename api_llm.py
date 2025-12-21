@@ -4,11 +4,34 @@ import time
 import ssl
 import base64
 import io
+import pymysql
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen, build_opener, HTTPSHandler, install_opener
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, parse_qs
+
+# MySQL Config
+def _get_mysql_conn():
+    _load_env()
+    host = os.environ.get("MYSQL_HOST", "localhost")
+    port = int(os.environ.get("MYSQL_PORT", 3306))
+    user = os.environ.get("MYSQL_USER", "root")
+    password = os.environ.get("MYSQL_PASSWORD", "")
+    database = os.environ.get("MYSQL_DATABASE", "it_diathesis_system")
+    
+    try:
+        return pymysql.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database,
+            cursorclass=pymysql.cursors.DictCursor
+        )
+    except Exception as e:
+        print(f"MySQL Connection Error: {e}")
+        return None
 
 # LightRAG Integration
 lightrag_wrapper = None
@@ -32,8 +55,9 @@ neo4j = None
 try:
     import neo4j as _neo4j
     neo4j = _neo4j
-except Exception:
+except Exception as e:
     neo4j = None
+    print(f"DEBUG: neo4j module import failed: {e}")
 
 def _load_env(path=".env"):
     try:
@@ -75,6 +99,7 @@ def _query_neo4j(fn):
     database=os.environ.get("NEO4J_DATABASE") or cfg.get("database") or None
     if neo4j is None:
         return None
+    
     driver=neo4j.GraphDatabase.driver(uri, auth=(user, password))
     try:
         with driver.session(database=database) as session:
@@ -82,38 +107,74 @@ def _query_neo4j(fn):
     finally:
         driver.close()
 
-def _log_dialogue(session_id, role, content):
+def _log_dialogue(session_id, role, content, context=None):
     if not session_id: return
-    def run(session):
-        cypher = """
-        MERGE (s:ExperimentSession {id: $sid})
-        ON CREATE SET s.start_time = datetime()
-        CREATE (l:DialogueLog {
-            role: $role,
-            content: $content,
-            timestamp: datetime()
-        })
-        CREATE (s)-[:HAS_LOG]->(l)
-        """
-        session.run(cypher, {"sid": session_id, "role": role, "content": content})
-    _query_neo4j(run)
+    try:
+        conn = _get_mysql_conn()
+        if not conn: return
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO dialogue_logs (session_id, role, content, context) VALUES (%s, %s, %s, %s)",
+                (session_id, role, content, context or "")
+            )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"MySQL log error: {e}")
 
 def _log_learning(session_id, question_id, is_correct):
     if not session_id: return
+    try:
+        conn = _get_mysql_conn()
+        if not conn: return
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO learning_logs (session_id, question_id, is_correct) VALUES (%s, %s, %s)",
+                (session_id, question_id, is_correct)
+            )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"MySQL log error: {e}")
+
+def _search_competency_path(question):
+    """
+    基于图谱的上下文检索：查找问题中提到的概念，并追溯其所属的核心素养路径。
+    这实现了'图谱引导'的生成。
+    """
+    if not question: return []
+    
     def run(session):
+        # 查找名称出现在问题中的节点（反向匹配），并向上追溯路径
+        # Label 修正：CoreLiteracy, SubDimension, ContentModule
         cypher = """
-        MERGE (s:ExperimentSession {id: $sid})
-        ON CREATE SET s.start_time = datetime()
-        MATCH (q:Question) WHERE elementId(q) = $qid OR q.id = $qid
-        CREATE (l:LearningLog {
-            is_correct: $correct,
-            timestamp: datetime()
-        })
-        CREATE (s)-[:HAS_LEARNING_LOG]->(l)
-        CREATE (l)-[:RELATED_TO]->(q)
+        MATCH (n) 
+        WHERE (n:CoreLiteracy OR n:SubDimension OR n:ContentModule) 
+          AND size(n.name) > 1 
+          AND $question CONTAINS n.name
+        WITH n
+        LIMIT 3
+        MATCH path = (root:CoreLiteracy)-[:INCLUDES|HAS_DIMENSION|DEVELOPED_BY*1..4]->(n)
+        WHERE root.level = '顶层' OR root.level = '核心素养'
+        RETURN [node in nodes(path) | node.name] AS path_names
+        ORDER BY length(path) ASC
+        LIMIT 3
         """
-        session.run(cypher, {"sid": session_id, "qid": question_id, "correct": is_correct})
-    _query_neo4j(run)
+        return session.run(cypher, {"question": question}).data()
+    
+    try:
+        results = _query_neo4j(run)
+        paths = []
+        if results:
+            for r in results:
+                names = r.get("path_names", [])
+                if names:
+                    paths.append(" -> ".join(names))
+        # 去重
+        return list(set(paths))
+    except Exception as e:
+        print(f"Graph search error: {e}")
+        return []
 
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
@@ -432,7 +493,14 @@ class Handler(BaseHTTPRequestHandler):
         # Log User Question
         if session_id and question:
             _log_dialogue(session_id, "user", question)
-
+        
+        # 1. Graph-Guided Retrieval (New Feature for Paper)
+        # 主动从 Neo4j 检索素养路径，作为高层指导
+        graph_paths = _search_competency_path(question)
+        graph_context_text = ""
+        if graph_paths:
+            graph_context_text = "【图谱背景知识】\n本问题关联的学科素养路径：\n" + "\n".join([f"- {p}" for p in graph_paths])
+        
         _load_env()
         base=os.environ.get("MS_BASE_URL","https://api-inference.modelscope.cn/v1").rstrip("/")
         key=os.environ.get("MS_API_KEY","" ).strip()
@@ -444,10 +512,14 @@ class Handler(BaseHTTPRequestHandler):
             self._cors()
             self.send_header("Content-Type","application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"answer": fallback, "degraded": True, "error": "missing MS_API_KEY"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"answer": fallback, "degraded": True, "error": "missing MS_API_KEY", "context_path": graph_paths}).encode("utf-8"))
             return
 
         parts=[]
+        # Add Graph Context first if available
+        if graph_context_text:
+            parts.append(graph_context_text)
+
         for e in evidence:
             a=[]
             f=str((e or {}).get("focus") or "").strip()
@@ -550,13 +622,13 @@ class Handler(BaseHTTPRequestHandler):
 
         # Log AI Answer
         if session_id and answer:
-            _log_dialogue(session_id, "assistant", answer)
+            _log_dialogue(session_id, "assistant", answer, context=graph_context_text if graph_paths else None)
 
         self.send_response(200)
         self._cors()
         self.send_header("Content-Type","application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"answer":answer}).encode("utf-8"))
+        self.wfile.write(json.dumps({"answer":answer, "context_path": graph_paths}).encode("utf-8"))
 
 def main():
     _load_env()
