@@ -27,7 +27,8 @@ def _get_mysql_conn():
             user=user,
             password=password,
             database=database,
-            cursorclass=pymysql.cursors.DictCursor
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=True
         )
     except Exception as e:
         print(f"MySQL Connection Error: {e}")
@@ -117,7 +118,7 @@ def _log_dialogue(session_id, role, content, context=None):
                 "INSERT INTO dialogue_logs (session_id, role, content, context) VALUES (%s, %s, %s, %s)",
                 (session_id, role, content, context or "")
             )
-        conn.commit()
+        # conn.commit() is not needed if autocommit=True, but harmless
         conn.close()
     except Exception as e:
         print(f"MySQL log error: {e}")
@@ -218,6 +219,42 @@ class Handler(BaseHTTPRequestHandler):
                 self._cors()
                 self.end_headers()
                 self.wfile.write(b'{"error": "LightRAG not available"}')
+            return
+
+        if self.path.startswith("/history"):
+            qs = parse_qs(urlparse(self.path).query)
+            session_id = (qs.get("session_id") or [""])[0].strip()
+            if not session_id:
+                self.send_response(400)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(b'{"error": "session_id required"}')
+                return
+            
+            try:
+                conn = _get_mysql_conn()
+                if not conn:
+                    raise Exception("Database connection failed")
+                
+                with conn.cursor() as cursor:
+                    # Fetch logs ordered by time
+                    cursor.execute("SELECT role, content FROM dialogue_logs WHERE session_id = %s ORDER BY timestamp ASC", (session_id,))
+                    rows = cursor.fetchall()
+                    
+                conn.close()
+                
+                history = [{"role": r["role"], "content": r["content"]} for r in rows]
+                
+                self.send_response(200)
+                self._cors()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"history": history}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
             return
 
         if self.path.startswith("/question"):

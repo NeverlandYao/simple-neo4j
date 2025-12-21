@@ -138,6 +138,26 @@ export default function App() {
       fetchDbs();
   }, []);
 
+  // Load Chat History
+  useEffect(() => {
+    if (!sessionId) return;
+    
+    async function loadHistory() {
+      try {
+        const res = await fetch(`/history?session_id=${sessionId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.history && Array.isArray(data.history)) {
+            setMessages(data.history);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load history:", err);
+      }
+    }
+    loadHistory();
+  }, [sessionId]);
+
   // Load Graph Data when DB changes
   useEffect(() => {
     if (!currentDb) return;
@@ -300,6 +320,7 @@ export default function App() {
       }
       
       // 2. Call LLM API
+      console.log("Sending message with session_id:", sessionId);
       const response = await fetch('/llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

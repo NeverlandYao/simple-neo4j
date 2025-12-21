@@ -6,6 +6,26 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      '/history': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/task_status': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/cancel_task': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/upload_doc': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/zpd_update': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
       '/llm': {
         target: 'http://localhost:8001',
         changeOrigin: true,
